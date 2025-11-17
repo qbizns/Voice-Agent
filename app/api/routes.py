@@ -15,26 +15,36 @@ from app.models.schemas import (
     TTSResponse,
     ChatRequest,
     ChatResponse,
+    VisemeFrameSchema,
 )
 from app.services.stt_service import STTService
 from app.services.tts_service import TTSService
 from app.services.ai_agent import AIAgent
 from app.services.knowledge_base import KnowledgeBase
+from app.services.lipsync_service import LipSyncService
 
 # Initialize services (will be set by main app)
 stt_service: Optional[STTService] = None
 tts_service: Optional[TTSService] = None
 ai_agent: Optional[AIAgent] = None
 knowledge_base: Optional[KnowledgeBase] = None
+lipsync_service: Optional[LipSyncService] = None
 
 
-def set_services(stt: STTService, tts: TTSService, agent: AIAgent, kb: KnowledgeBase) -> None:
+def set_services(
+    stt: STTService,
+    tts: TTSService,
+    agent: AIAgent,
+    kb: KnowledgeBase,
+    lipsync: Optional[LipSyncService] = None
+) -> None:
     """Set service instances."""
-    global stt_service, tts_service, ai_agent, knowledge_base
+    global stt_service, tts_service, ai_agent, knowledge_base, lipsync_service
     stt_service = stt
     tts_service = tts
     ai_agent = agent
     knowledge_base = kb
+    lipsync_service = lipsync
 
 
 router = APIRouter()
@@ -215,25 +225,46 @@ async def websocket_conversation(websocket: WebSocket) -> None:
                 # Synthesize response
                 audio_response, tts_time = await tts_service.synthesize(response_text)
 
+                # Generate visemes if lip-sync service available
+                visemes_data = []
+                lipsync_time = 0.0
+                if lipsync_service and lipsync_service.enabled:
+                    try:
+                        viseme_frames, lipsync_time = await lipsync_service.generate_visemes(
+                            audio_data=audio_response,
+                            text=response_text,
+                            audio_format="mp3"
+                        )
+                        visemes_data = [v.to_dict() for v in viseme_frames]
+                    except Exception as e:
+                        logger.warning(f"Lip-sync generation failed: {e}")
+
                 # Encode audio to base64
                 audio_b64_response = base64.b64encode(audio_response).decode('utf-8')
 
                 total_time = (time.perf_counter() - start_time) * 1000
 
                 # Send response
+                response_data = {
+                    "text": response_text,
+                    "audio": audio_b64_response,
+                    "sources": sources,
+                    "processing_times": {
+                        "transcription_ms": trans_time,
+                        "ai_generation_ms": ai_time,
+                        "synthesis_ms": tts_time,
+                        "lipsync_ms": lipsync_time,
+                        "total_ms": total_time
+                    }
+                }
+
+                # Include visemes if available
+                if visemes_data:
+                    response_data["visemes"] = visemes_data
+
                 await websocket.send_json({
                     "type": "response",
-                    "data": {
-                        "text": response_text,
-                        "audio": audio_b64_response,
-                        "sources": sources,
-                        "processing_times": {
-                            "transcription_ms": trans_time,
-                            "ai_generation_ms": ai_time,
-                            "synthesis_ms": tts_time,
-                            "total_ms": total_time
-                        }
-                    }
+                    "data": response_data
                 })
 
                 logger.info(f"Full conversation cycle: {total_time:.2f}ms")
@@ -252,21 +283,43 @@ async def websocket_conversation(websocket: WebSocket) -> None:
 
                 # Synthesize response
                 audio_response, tts_time = await tts_service.synthesize(response_text)
+
+                # Generate visemes if lip-sync service available
+                visemes_data = []
+                lipsync_time = 0.0
+                if lipsync_service and lipsync_service.enabled:
+                    try:
+                        viseme_frames, lipsync_time = await lipsync_service.generate_visemes(
+                            audio_data=audio_response,
+                            text=response_text,
+                            audio_format="mp3"
+                        )
+                        visemes_data = [v.to_dict() for v in viseme_frames]
+                    except Exception as e:
+                        logger.warning(f"Lip-sync generation failed: {e}")
+
                 audio_b64_response = base64.b64encode(audio_response).decode('utf-8')
 
                 # Send response
+                response_data = {
+                    "text": response_text,
+                    "audio": audio_b64_response,
+                    "sources": sources,
+                    "processing_times": {
+                        "ai_generation_ms": ai_time,
+                        "synthesis_ms": tts_time,
+                        "lipsync_ms": lipsync_time,
+                        "total_ms": ai_time + tts_time + lipsync_time
+                    }
+                }
+
+                # Include visemes if available
+                if visemes_data:
+                    response_data["visemes"] = visemes_data
+
                 await websocket.send_json({
                     "type": "response",
-                    "data": {
-                        "text": response_text,
-                        "audio": audio_b64_response,
-                        "sources": sources,
-                        "processing_times": {
-                            "ai_generation_ms": ai_time,
-                            "synthesis_ms": tts_time,
-                            "total_ms": ai_time + tts_time
-                        }
-                    }
+                    "data": response_data
                 })
 
             elif msg_type == "ping":

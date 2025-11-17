@@ -14,6 +14,7 @@ from app.services.stt_service import STTService
 from app.services.tts_service import TTSService
 from app.services.knowledge_base import KnowledgeBase
 from app.services.ai_agent import AIAgent
+from app.services.lipsync_service import LipSyncService
 
 
 # Initialize services
@@ -21,12 +22,13 @@ stt_service: STTService | None = None
 tts_service: TTSService | None = None
 knowledge_base: KnowledgeBase | None = None
 ai_agent: AIAgent | None = None
+lipsync_service: LipSyncService | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
-    global stt_service, tts_service, knowledge_base, ai_agent
+    global stt_service, tts_service, knowledge_base, ai_agent, lipsync_service
 
     # Setup logging
     setup_logging()
@@ -64,8 +66,16 @@ async def lifespan(app: FastAPI):
         logger.info("Initializing AI Agent...")
         ai_agent = AIAgent(knowledge_base=knowledge_base)
 
+        # Initialize Lip-Sync Service
+        logger.info("Initializing Lip-Sync service...")
+        lipsync_service = LipSyncService()
+        if lipsync_service.enabled:
+            logger.info("Lip-sync enabled with Rhubarb")
+        else:
+            logger.warning("Lip-sync disabled (Rhubarb not found)")
+
         # Set services in routes
-        routes.set_services(stt_service, tts_service, ai_agent, knowledge_base)
+        routes.set_services(stt_service, tts_service, ai_agent, knowledge_base, lipsync_service)
 
         logger.info("All services initialized successfully!")
         logger.info(f"Server ready at http://{settings.host}:{settings.port}")

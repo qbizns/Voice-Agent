@@ -33,6 +33,13 @@ class TTSResponse(BaseModel):
     processing_time_ms: float
 
 
+class VisemeFrameSchema(BaseModel):
+    """Viseme keyframe with timestamp."""
+    time_ms: float = Field(description="Timestamp in milliseconds")
+    id: str = Field(description="Viseme ID (A, B, C, D, E, F, G, H, X)")
+    weight: float = Field(default=1.0, description="Intensity 0.0-1.0")
+
+
 class ChatRequest(BaseModel):
     """Request model for chat interaction."""
     message: str
@@ -43,6 +50,7 @@ class ChatResponse(BaseModel):
     """Response model for chat interaction."""
     response: str
     sources: Optional[list[str]] = None
+    visemes: Optional[list[VisemeFrameSchema]] = None
     processing_time_ms: float
 
 
