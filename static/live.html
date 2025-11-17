@@ -435,6 +435,11 @@
         let isAIResponding = false;
         let currentAudio = null;
 
+        // Streaming audio state
+        let audioQueue = [];
+        let isPlayingQueue = false;
+        let streamingInProgress = false;
+
         // DOM Elements
         const startButton = document.getElementById('startButton');
         const statusDiv = document.getElementById('status');
@@ -561,6 +566,46 @@
                     }
                     break;
 
+                case 'audio_chunk':
+                    // Streaming audio chunk received
+                    const audioChunk = message.data.audio;
+                    const chunkIndex = message.data.chunk_index;
+                    const textChunk = message.data.text_chunk;
+
+                    if (!streamingInProgress) {
+                        streamingInProgress = true;
+                        isAIResponding = true;
+                        log('Starting streaming audio playback', 'received');
+                    }
+
+                    // Add to queue and start playback
+                    audioQueue.push(audioChunk);
+                    playAudioQueue();
+
+                    log(`Audio chunk ${chunkIndex} queued (${textChunk.substring(0, 30)}...)`, 'received');
+                    break;
+
+                case 'streaming_complete':
+                    // Streaming complete
+                    streamingInProgress = false;
+                    const fullText = message.data.text;
+                    responseText.textContent = fullText;
+
+                    // Show metrics
+                    if (message.data.processing_times) {
+                        metricsDiv.style.display = 'grid';
+                        document.getElementById('sttTime').textContent =
+                            Math.round(message.data.processing_times.transcription_ms) + 'ms';
+                        document.getElementById('aiTime').textContent =
+                            Math.round(message.data.processing_times.ai_generation_ms) + 'ms';
+                        document.getElementById('ttsTime').textContent = 'streaming';
+                        document.getElementById('totalTime').textContent =
+                            Math.round(message.data.processing_times.total_ms) + 'ms';
+                    }
+
+                    log(`Streaming complete (${message.data.chunks_sent} chunks, ${fullText.length} chars)`, 'received');
+                    break;
+
                 case 'response':
                     const response = message.data;
                     responseText.textContent = response.text;
@@ -573,7 +618,7 @@
                         document.getElementById('aiTime').textContent =
                             Math.round(response.processing_times.ai_generation_ms) + 'ms';
                         document.getElementById('ttsTime').textContent =
-                            Math.round(response.processing_times.synthesis_ms) + 'ms';
+                            Math.round(response.processing_times.synthesis_ms || 0) + 'ms';
                         document.getElementById('totalTime').textContent =
                             Math.round(response.processing_times.total_ms) + 'ms';
                     }
@@ -584,6 +629,9 @@
                     }
 
                     log(`Response received (${response.text.length} chars)`, 'received');
+                    if (response.from_cache) {
+                        log('✨ Response from cache', 'success');
+                    }
                     break;
 
                 case 'error':
@@ -619,8 +667,79 @@
                 currentAudio.currentTime = 0;
                 currentAudio = null;
             }
+            // Clear audio queue
+            audioQueue = [];
+            isPlayingQueue = false;
+            streamingInProgress = false;
             isAIResponding = false;
             log('Audio playback stopped', 'info');
+        }
+
+        // Play queued audio chunks in sequence
+        async function playAudioQueue() {
+            // If already playing, let it continue
+            if (isPlayingQueue) {
+                return;
+            }
+
+            // Start processing queue
+            isPlayingQueue = true;
+
+            while (audioQueue.length > 0) {
+                // Check if interrupted
+                if (!isAIResponding) {
+                    audioQueue = [];
+                    break;
+                }
+
+                // Get next chunk
+                const base64Audio = audioQueue.shift();
+
+                try {
+                    // Decode and play chunk
+                    const binaryString = atob(base64Audio);
+                    const bytes = new Uint8Array(binaryString.length);
+                    for (let i = 0; i < binaryString.length; i++) {
+                        bytes[i] = binaryString.charCodeAt(i);
+                    }
+
+                    const blob = new Blob([bytes], { type: 'audio/mpeg' });
+                    const url = URL.createObjectURL(blob);
+                    const audio = new Audio(url);
+                    currentAudio = audio;
+
+                    // Wait for this chunk to finish playing
+                    await new Promise((resolve, reject) => {
+                        audio.onended = () => {
+                            URL.revokeObjectURL(url);
+                            currentAudio = null;
+                            resolve();
+                        };
+
+                        audio.onerror = (e) => {
+                            URL.revokeObjectURL(url);
+                            currentAudio = null;
+                            log('Audio chunk playback error', 'error');
+                            reject(e);
+                        };
+
+                        audio.play().catch(reject);
+                    });
+
+                } catch (e) {
+                    log('Error playing audio chunk: ' + e.message, 'error');
+                }
+            }
+
+            // Queue is empty
+            isPlayingQueue = false;
+
+            // If streaming is complete and queue is empty, mark as not responding
+            if (!streamingInProgress && audioQueue.length === 0) {
+                isAIResponding = false;
+                currentAudio = null;
+                log('All audio chunks played', 'info');
+            }
         }
 
         // Play audio response

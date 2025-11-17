@@ -2,7 +2,7 @@
 
 import time
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Optional, AsyncGenerator
 
 import httpx
 from loguru import logger
@@ -33,6 +33,27 @@ class LLMProvider(ABC):
 
         Returns:
             Generated response text
+        """
+        pass
+
+    @abstractmethod
+    async def generate_stream(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 500
+    ) -> AsyncGenerator[str, None]:
+        """Generate response from LLM as a stream.
+
+        Args:
+            prompt: User prompt
+            system_prompt: System prompt for context
+            temperature: Sampling temperature
+            max_tokens: Maximum tokens to generate
+
+        Yields:
+            Text chunks as they are generated
         """
         pass
 
@@ -130,6 +151,104 @@ class OllamaProvider(LLMProvider):
             logger.error(f"Ollama API error: {e}")
             raise RuntimeError(f"Failed to generate response: {e}")
 
+    async def generate_stream(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 500
+    ) -> AsyncGenerator[str, None]:
+        """Generate streaming response using Ollama."""
+        try:
+            # Prepare messages
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": prompt})
+
+            # Call Ollama API with streaming enabled
+            async with self.client.stream(
+                "POST",
+                f"{self.base_url}/api/chat",
+                json={
+                    "model": self.model,
+                    "messages": messages,
+                    "stream": True,
+                    "options": {
+                        "temperature": temperature,
+                        "num_predict": max_tokens
+                    }
+                }
+            ) as response:
+                response.raise_for_status()
+
+                # Stream chunks
+                async for line in response.aiter_lines():
+                    if line:
+                        try:
+                            import json
+                            chunk = json.loads(line)
+                            if "message" in chunk and "content" in chunk["message"]:
+                                content = chunk["message"]["content"]
+                                if content:
+                                    yield content
+                        except json.JSONDecodeError:
+                            continue
+
+        except httpx.HTTPError as e:
+            logger.error(f"Ollama streaming API error: {e}")
+            raise RuntimeError(f"Failed to generate streaming response: {e}")
+
+    async def generate_stream_with_history(
+        self,
+        messages: list[dict],
+        temperature: float = 0.7,
+        max_tokens: int = 500
+    ) -> AsyncGenerator[str, None]:
+        """Generate streaming response with conversation history.
+
+        Args:
+            messages: List of message dicts with role and content
+            temperature: Sampling temperature
+            max_tokens: Maximum tokens to generate
+
+        Yields:
+            Text chunks as they are generated
+        """
+        try:
+            # Call Ollama API with streaming enabled
+            async with self.client.stream(
+                "POST",
+                f"{self.base_url}/api/chat",
+                json={
+                    "model": self.model,
+                    "messages": messages,
+                    "stream": True,
+                    "options": {
+                        "temperature": temperature,
+                        "num_predict": max_tokens
+                    }
+                }
+            ) as response:
+                response.raise_for_status()
+
+                # Stream chunks
+                async for line in response.aiter_lines():
+                    if line:
+                        try:
+                            import json
+                            chunk = json.loads(line)
+                            if "message" in chunk and "content" in chunk["message"]:
+                                content = chunk["message"]["content"]
+                                if content:
+                                    yield content
+                        except json.JSONDecodeError:
+                            continue
+
+        except httpx.HTTPError as e:
+            logger.error(f"Ollama streaming API error: {e}")
+            raise RuntimeError(f"Failed to generate streaming response: {e}")
+
     async def close(self) -> None:
         """Close HTTP client."""
         await self.client.aclose()
@@ -189,6 +308,22 @@ class LocalLLMProvider(LLMProvider):
         response = response[len(full_prompt):].strip()
 
         return response
+
+    async def generate_stream(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 500
+    ) -> AsyncGenerator[str, None]:
+        """Generate streaming response (not supported for local model).
+
+        Falls back to non-streaming generation.
+        """
+        # For local models, we don't have streaming support yet
+        # Fall back to generating the full response
+        response = await self.generate(prompt, system_prompt, temperature, max_tokens)
+        yield response
 
 
 class AIAgent:
@@ -334,6 +469,106 @@ class AIAgent:
 
         logger.info(f"Generated response in {processing_time:.2f}ms")
         return response, sources if sources else None, processing_time
+
+    async def generate_response_stream(
+        self,
+        message: str,
+        use_knowledge_base: bool = True,
+        conversation_history: Optional[list[dict]] = None
+    ) -> AsyncGenerator[tuple[str, Optional[list[str]]], None]:
+        """Generate streaming response to user message.
+
+        Args:
+            message: User message
+            use_knowledge_base: Whether to use knowledge base for context
+            conversation_history: Optional conversation history
+
+        Yields:
+            Tuples of (text_chunk, sources)
+        """
+        # Try structured knowledge first for precise answers
+        if self.structured_knowledge:
+            structured_answer = self.structured_knowledge.query_all(message)
+            if structured_answer:
+                logger.info("Answered from structured knowledge (streaming)")
+                yield structured_answer, ["structured_knowledge"]
+                return
+
+        # Get context from knowledge base if enabled
+        context = ""
+        sources = []
+
+        if use_knowledge_base and self.knowledge_base:
+            try:
+                context = self.knowledge_base.get_context(message)
+                results = self.knowledge_base.search(message)
+                sources = [meta.get("source", "") for _, _, meta in results]
+                logger.debug(f"Retrieved context from {len(sources)} sources")
+            except Exception as e:
+                logger.warning(f"Failed to retrieve from knowledge base: {e}")
+
+        # Build prompt with conversation history
+        if conversation_history and hasattr(self.llm, 'generate_stream_with_history'):
+            # Use conversation history with LLM streaming
+            messages = []
+
+            # Add system prompt
+            if self.settings.system_prompt:
+                messages.append({"role": "system", "content": self.settings.system_prompt})
+
+            # Add conversation history
+            messages.extend(conversation_history)
+
+            # Add knowledge base context if available
+            if context:
+                current_message = f"""السياق من قاعدة المعرفة:
+{context}
+
+السؤال: {message}
+
+الرجاء الإجابة بناءً على السياق المقدم والمحادثة السابقة."""
+            else:
+                current_message = message
+
+            messages.append({"role": "user", "content": current_message})
+
+            # Generate with history (streaming)
+            try:
+                logger.info("Starting streaming generation with history")
+                async for chunk in self.llm.generate_stream_with_history(
+                    messages=messages,
+                    temperature=self.settings.temperature,
+                    max_tokens=self.settings.max_tokens
+                ):
+                    yield chunk, sources if sources else None
+            except Exception as e:
+                logger.error(f"Failed to generate streaming response: {e}")
+                raise
+        else:
+            # Fallback to simple streaming generation
+            if context:
+                prompt = f"""السياق من قاعدة المعرفة:
+{context}
+
+السؤال: {message}
+
+الرجاء الإجابة بناءً على السياق المقدم. إذا لم تكن المعلومات متوفرة في السياق، قل ذلك بوضوح."""
+            else:
+                prompt = message
+
+            # Generate streaming response
+            try:
+                logger.info("Starting streaming generation")
+                async for chunk in self.llm.generate_stream(
+                    prompt=prompt,
+                    system_prompt=self.settings.system_prompt,
+                    temperature=self.settings.temperature,
+                    max_tokens=self.settings.max_tokens
+                ):
+                    yield chunk, sources if sources else None
+            except Exception as e:
+                logger.error(f"Failed to generate streaming response: {e}")
+                yield "عذراً، حدث خطأ أثناء معالجة طلبك.", None
 
     async def close(self) -> None:
         """Clean up resources."""

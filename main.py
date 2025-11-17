@@ -13,6 +13,7 @@ from app.api import routes
 from app.api import live_routes
 from app.services.stt_service import STTService
 from app.services.tts_service import TTSService
+from app.services.streaming_tts_service import StreamingTTSService
 from app.services.knowledge_base import KnowledgeBase
 from app.services.ai_agent import AIAgent
 from app.services.lipsync_service import LipSyncService
@@ -24,6 +25,7 @@ from app.services.cache_service import ResponseCache
 # Initialize services
 stt_service: STTService | None = None
 tts_service: TTSService | None = None
+streaming_tts_service: StreamingTTSService | None = None
 knowledge_base: KnowledgeBase | None = None
 ai_agent: AIAgent | None = None
 lipsync_service: LipSyncService | None = None
@@ -35,7 +37,7 @@ cache_service: ResponseCache | None = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
-    global stt_service, tts_service, knowledge_base, ai_agent, lipsync_service, vad_service, context_service, cache_service
+    global stt_service, tts_service, streaming_tts_service, knowledge_base, ai_agent, lipsync_service, vad_service, context_service, cache_service
 
     # Setup logging
     setup_logging()
@@ -54,6 +56,14 @@ async def lifespan(app: FastAPI):
         # Initialize TTS
         logger.info("Initializing Text-to-Speech service...")
         tts_service = TTSService()
+
+        # Initialize Streaming TTS
+        logger.info("Initializing Streaming TTS service...")
+        streaming_tts_service = StreamingTTSService()
+        if streaming_tts_service.enabled:
+            logger.info("Streaming TTS enabled for sentence-by-sentence generation")
+        else:
+            logger.warning("Streaming TTS disabled (edge-tts not available)")
 
         # Initialize Knowledge Base
         logger.info("Initializing Knowledge Base...")
@@ -112,7 +122,7 @@ async def lifespan(app: FastAPI):
 
         # Set services in routes
         routes.set_services(stt_service, tts_service, ai_agent, knowledge_base, lipsync_service)
-        live_routes.set_services(stt_service, tts_service, ai_agent, knowledge_base, vad_service, context_service, cache_service)
+        live_routes.set_services(stt_service, tts_service, ai_agent, knowledge_base, vad_service, context_service, cache_service, streaming_tts_service)
 
         logger.info("All services initialized successfully!")
         logger.info(f"Server ready at http://{settings.host}:{settings.port}")
