@@ -44,9 +44,22 @@ class Settings(BaseSettings):
 
     # Text-to-Speech
     tts_engine: Literal["edge", "coqui"] = Field(default="edge", alias="TTS_ENGINE")
-    tts_voice: str = Field(default="ar-EG-SalmaNeural", alias="TTS_VOICE")
+    tts_voice: str = Field(default="ar-EG-SalmaNeural", alias="TTS_VOICE")  # Legacy
     tts_rate: str = Field(default="+0%", alias="TTS_RATE")
     tts_volume: str = Field(default="+0%", alias="TTS_VOLUME")
+    tts_pitch: str = Field(default="+0Hz", alias="TTS_PITCH")
+
+    # TTS Dialect Configuration (NEW - Multi-dialect support)
+    default_tts_dialect: str = Field(default="arabic_egypt", alias="DEFAULT_TTS_DIALECT")
+    default_tts_gender: str = Field(default="female", alias="DEFAULT_TTS_GENDER")
+    allow_dialect_selection: bool = Field(default=True, alias="ALLOW_DIALECT_SELECTION")
+    use_ssml: bool = Field(default=True, alias="USE_SSML")
+
+    # Premium TTS Providers (Optional)
+    use_google_tts: bool = Field(default=False, alias="USE_GOOGLE_TTS")
+    google_credentials_path: str = Field(default="", alias="GOOGLE_CREDENTIALS_PATH")
+    use_elevenlabs_tts: bool = Field(default=False, alias="USE_ELEVENLABS_TTS")
+    elevenlabs_api_key: str = Field(default="", alias="ELEVENLABS_API_KEY")
 
     # Knowledge Base
     knowledge_base_path: str = Field(default="knowledge_base", alias="KNOWLEDGE_BASE_PATH")

@@ -332,6 +332,86 @@
             50% { opacity: 0.5; }
         }
 
+        /* Voice Selector Styles */
+        .voice-selector {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(10px);
+            padding: 20px;
+            border-radius: 15px;
+            border: 1px solid rgba(0, 212, 255, 0.3);
+            z-index: 10;
+            min-width: 280px;
+        }
+
+        .voice-selector-header {
+            color: #00d4ff;
+            font-size: 1.1em;
+            font-weight: 600;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .voice-selector-group {
+            margin-bottom: 15px;
+        }
+
+        .voice-selector-group:last-child {
+            margin-bottom: 0;
+        }
+
+        .voice-selector-label {
+            color: #aaa;
+            font-size: 0.9em;
+            margin-bottom: 8px;
+            display: block;
+        }
+
+        .voice-selector select {
+            width: 100%;
+            padding: 10px 15px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            color: #e0e0e0;
+            font-size: 1em;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .voice-selector select:hover {
+            background: rgba(255, 255, 255, 0.15);
+            border-color: rgba(0, 212, 255, 0.5);
+        }
+
+        .voice-selector select:focus {
+            outline: none;
+            border-color: #00d4ff;
+            box-shadow: 0 0 10px rgba(0, 212, 255, 0.3);
+        }
+
+        .voice-selector select option {
+            background: #1a1f3a;
+            color: #e0e0e0;
+        }
+
+        .current-voice {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            font-size: 0.85em;
+            color: #888;
+        }
+
+        .current-voice span {
+            color: #00d4ff;
+            font-weight: 500;
+        }
+
         @media (max-width: 1024px) {
             .main-area {
                 grid-template-columns: 1fr;
@@ -353,6 +433,45 @@
 
         <div class="main-area">
             <div class="visualizer-section">
+                <!-- Voice Selector -->
+                <div class="voice-selector">
+                    <div class="voice-selector-header">
+                        <span>🎭</span>
+                        <span>اختيار الصوت</span>
+                    </div>
+                    <div class="voice-selector-group">
+                        <label class="voice-selector-label">اللهجة</label>
+                        <select id="dialectSelect">
+                            <option value="arabic_egypt">🇪🇬 مصري / Egyptian</option>
+                            <option value="arabic_saudi">🇸🇦 سعودي / Saudi</option>
+                            <option value="arabic_gulf">🇦🇪 خليجي / Gulf</option>
+                            <option value="arabic_levantine">🇯🇴 شامي / Levantine</option>
+                            <option value="arabic_maghreb">🇲🇦 مغربي / Maghrebi</option>
+                            <option value="arabic_iraq">🇮🇶 عراقي / Iraqi</option>
+                            <option value="arabic_yemen">🇾🇪 يمني / Yemeni</option>
+                            <option value="arabic_sudan">🇸🇩 سوداني / Sudanese</option>
+                            <option value="arabic_tunisia">🇹🇳 تونسي / Tunisian</option>
+                            <option value="arabic_algeria">🇩🇿 جزائري / Algerian</option>
+                            <option value="arabic_libya">🇱🇾 ليبي / Libyan</option>
+                            <option value="arabic_oman">🇴🇲 عماني / Omani</option>
+                            <option value="arabic_syria">🇸🇾 سوري / Syrian</option>
+                            <option value="arabic_qatar">🇶🇦 قطري / Qatari</option>
+                            <option value="arabic_bahrain">🇧🇭 بحريني / Bahraini</option>
+                            <option value="arabic_kuwait">🇰🇼 كويتي / Kuwaiti</option>
+                        </select>
+                    </div>
+                    <div class="voice-selector-group">
+                        <label class="voice-selector-label">الجنس</label>
+                        <select id="genderSelect">
+                            <option value="female">أنثى / Female</option>
+                            <option value="male">ذكر / Male</option>
+                        </select>
+                    </div>
+                    <div class="current-voice" id="currentVoiceDisplay">
+                        الصوت الحالي: <span id="currentVoiceName">تحميل...</span>
+                    </div>
+                </div>
+
                 <div class="recording-indicator" id="recordingIndicator">● RECORDING</div>
                 <div class="vad-indicator" id="vadIndicator" style="display: none;">
                     <div class="vad-dot" id="vadDot"></div>
@@ -456,6 +575,9 @@
         const vadDot = document.getElementById('vadDot');
         const vadText = document.getElementById('vadText');
         const vadConfidence = document.getElementById('vadConfidence');
+        const dialectSelect = document.getElementById('dialectSelect');
+        const genderSelect = document.getElementById('genderSelect');
+        const currentVoiceName = document.getElementById('currentVoiceName');
 
         // Set canvas size
         canvas.width = canvas.offsetWidth;
@@ -539,6 +661,18 @@
                     if (vadEnabled) {
                         log('VAD enabled - hands-free mode active', 'success');
                         vadIndicator.style.display = 'flex';
+                    }
+                    // Update voice display
+                    if (message.data.voice) {
+                        updateVoiceDisplay(message.data.voice);
+                        log(`Voice: ${message.data.voice.display_name}`, 'success');
+                    }
+                    break;
+
+                case 'voice_updated':
+                    if (message.data.voice) {
+                        updateVoiceDisplay(message.data.voice);
+                        log(`Voice changed to: ${message.data.voice.display_name}`, 'success');
                     }
                     break;
 
@@ -678,6 +812,45 @@
             isAIResponding = false;
             log('Audio playback stopped', 'info');
         }
+
+        // Update voice display
+        function updateVoiceDisplay(voiceInfo) {
+            const { dialect, gender, display_name, voice_id } = voiceInfo;
+
+            // Update current voice display
+            currentVoiceName.textContent = `${display_name} (${voice_id})`;
+
+            // Update selects to match current voice (without triggering change event)
+            dialectSelect.value = dialect;
+            genderSelect.value = gender;
+
+            log(`Voice display updated: ${display_name}`, 'info');
+        }
+
+        // Send voice update to server
+        function sendVoiceUpdate() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                log('WebSocket not connected - cannot update voice', 'error');
+                return;
+            }
+
+            const dialect = dialectSelect.value;
+            const gender = genderSelect.value;
+
+            ws.send(JSON.stringify({
+                type: 'update_voice',
+                data: {
+                    dialect: dialect,
+                    gender: gender
+                }
+            }));
+
+            log(`Updating voice: ${dialect} (${gender})`, 'sent');
+        }
+
+        // Voice selector event listeners
+        dialectSelect.addEventListener('change', sendVoiceUpdate);
+        genderSelect.addEventListener('change', sendVoiceUpdate);
 
         // Play queued audio chunks in sequence
         async function playAudioQueue() {

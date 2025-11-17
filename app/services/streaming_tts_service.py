@@ -1,7 +1,14 @@
-"""Streaming Text-to-Speech service with sentence chunking.
+"""Streaming Text-to-Speech service with sentence chunking and dialect support.
 
 Generates audio in chunks (sentence-by-sentence) for streaming playback,
 dramatically reducing perceived latency.
+
+Features:
+- 32 Arabic voices across 16 dialects
+- Egyptian Arabic as default
+- SSML generation with pronunciation lexicon
+- Sentence-level chunking for low latency
+- Hybrid provider architecture
 """
 
 import re
@@ -9,45 +16,84 @@ import asyncio
 from typing import AsyncGenerator, List, Optional
 from loguru import logger
 
-try:
-    import edge_tts
-    EDGE_TTS_AVAILABLE = True
-except ImportError:
-    EDGE_TTS_AVAILABLE = False
-    logger.warning("edge-tts not available - streaming TTS disabled")
+from app.core.config import get_settings
+from .voice_profiles import get_voice_profile, GenderProfile
+from .hybrid_tts_service import HybridTTSService
+from .ssml_service import generate_ssml, normalize_arabic_text
+from .tts_cache import get_cached_tts_audio, cache_tts_audio
 
 
 class StreamingTTSService:
-    """Streaming TTS service with sentence-level chunking."""
+    """Streaming TTS service with sentence-level chunking and dialect support."""
 
     def __init__(
         self,
-        voice: str = "ar-SA-ZariyahNeural",
-        rate: str = "+0%",
-        volume: str = "+0%",
+        dialect: Optional[str] = None,
+        gender: Optional[str] = None,
         min_chunk_chars: int = 20,
-        max_chunk_chars: int = 200
+        max_chunk_chars: int = 200,
+        use_cache: bool = True
     ):
-        """Initialize streaming TTS service.
+        """Initialize streaming TTS service with dialect support.
 
         Args:
-            voice: Edge TTS voice ID
-            rate: Speech rate adjustment
-            volume: Volume adjustment
+            dialect: Dialect key (e.g., "arabic_egypt", "arabic_saudi")
+                    Defaults to config setting (arabic_egypt)
+            gender: Voice gender ("male" or "female")
+                   Defaults to config setting (female)
             min_chunk_chars: Minimum characters before sending chunk
             max_chunk_chars: Maximum characters per chunk
+            use_cache: Enable phrase caching (default: True)
         """
-        self.voice = voice
-        self.rate = rate
-        self.volume = volume
+        settings = get_settings()
+        self.settings = settings
+
+        # Set dialect and gender
+        self.dialect = dialect or settings.default_tts_dialect
+        self.gender = gender or settings.default_tts_gender
+        self.use_cache = use_cache
+
+        # Get voice profile for selected dialect/gender
+        self.voice_profile = get_voice_profile(self.dialect, self.gender)
+
+        # Initialize hybrid TTS service
+        self.hybrid_tts = HybridTTSService(
+            use_google=settings.use_google_tts,
+            use_elevenlabs=settings.use_elevenlabs_tts,
+            google_credentials_path=settings.google_credentials_path if settings.google_credentials_path else None,
+            elevenlabs_api_key=settings.elevenlabs_api_key if settings.elevenlabs_api_key else None
+        )
+
+        # Chunking settings
         self.min_chunk_chars = min_chunk_chars
         self.max_chunk_chars = max_chunk_chars
-        self.enabled = EDGE_TTS_AVAILABLE
 
-        if self.enabled:
-            logger.info(f"Streaming TTS initialized (voice={voice}, min_chunk={min_chunk_chars})")
-        else:
-            logger.warning("Streaming TTS disabled (edge-tts not available)")
+        logger.info(
+            f"✅ Streaming TTS initialized | "
+            f"Dialect: {self.dialect} | "
+            f"Gender: {self.gender} | "
+            f"Voice: {self.voice_profile.voice_id} | "
+            f"Min/Max chunk: {min_chunk_chars}/{max_chunk_chars}"
+        )
+
+    def update_voice(self, dialect: Optional[str] = None, gender: Optional[str] = None) -> None:
+        """Update voice dialect/gender dynamically.
+
+        Args:
+            dialect: New dialect key (None to keep current)
+            gender: New gender (None to keep current)
+        """
+        if dialect:
+            self.dialect = dialect
+        if gender:
+            self.gender = gender
+
+        # Reload voice profile
+        self.voice_profile = get_voice_profile(self.dialect, self.gender)
+
+        logger.info(
+            f"Voice updated → {self.dialect} ({self.gender}): {self.voice_profile.voice_id}"
+        )
 
     def _split_into_sentences(self, text: str) -> List[str]:
         """Split text into sentences for streaming.
@@ -175,33 +221,38 @@ class StreamingTTSService:
     async def synthesize_stream(
         self,
         text: str,
-        cancel_event: Optional[asyncio.Event] = None
+        cancel_event: Optional[asyncio.Event] = None,
+        priority: str = "normal"
     ) -> AsyncGenerator[bytes, None]:
-        """Generate audio stream in sentence-level chunks.
+        """Generate audio stream in sentence-level chunks with dialect support.
 
         Args:
             text: Text to synthesize
             cancel_event: Optional event to signal cancellation
+            priority: Quality priority ("normal", "premium", "ultra")
 
         Yields:
             Audio data chunks (MP3 format)
         """
-        if not self.enabled:
-            logger.error("Streaming TTS not available")
-            return
+        # Normalize text
+        normalized_text = normalize_arabic_text(text)
 
-        if not text or not text.strip():
-            logger.warning("Empty text provided for TTS")
+        if not normalized_text.strip():
+            logger.warning("Empty text after normalization")
             return
 
         # Split text into sentences
-        sentences = self._split_into_sentences(text)
+        sentences = self._split_into_sentences(normalized_text)
 
         if not sentences:
             logger.warning("No sentences extracted from text")
             return
 
-        logger.info(f"Streaming TTS for {len(sentences)} chunks")
+        logger.info(
+            f"Streaming TTS: {len(sentences)} chunks | "
+            f"Voice: {self.voice_profile.voice_id} | "
+            f"Dialect: {self.dialect}"
+        )
 
         # Generate audio for each sentence
         for i, sentence in enumerate(sentences):
@@ -211,30 +262,61 @@ class StreamingTTSService:
                 return
 
             try:
-                logger.debug(f"Generating chunk {i+1}/{len(sentences)}: '{sentence[:50]}...'")
+                logger.debug(f"Chunk {i+1}/{len(sentences)}: '{sentence[:50]}...'")
 
-                # Use Edge TTS to generate audio for this sentence
-                communicate = edge_tts.Communicate(
-                    text=sentence,
-                    voice=self.voice,
-                    rate=self.rate,
-                    volume=self.volume
-                )
+                # Check cache first (for common phrases)
+                chunk_data = None
+                if self.use_cache:
+                    chunk_data = get_cached_tts_audio(
+                        sentence,
+                        self.voice_profile.voice_id,
+                        self.voice_profile.rate,
+                        self.voice_profile.pitch
+                    )
 
-                # Collect all audio data for this sentence
-                chunk_data = b""
-                async for chunk in communicate.stream():
-                    if chunk["type"] == "audio":
-                        chunk_data += chunk["data"]
+                if not chunk_data:
+                    # Generate SSML if enabled
+                    if self.settings.use_ssml and not sentence.strip().startswith("<speak"):
+                        ssml_text = generate_ssml(
+                            sentence,
+                            self.voice_profile,
+                            self.dialect,
+                            use_lexicon=True
+                        )
+                        use_ssml = True
+                    else:
+                        ssml_text = sentence
+                        use_ssml = False
 
-                    # Check for cancellation during generation
-                    if cancel_event and cancel_event.is_set():
-                        logger.info(f"Streaming TTS cancelled during chunk {i+1}/{len(sentences)}")
-                        return
+                    # Synthesize using hybrid TTS streaming
+                    chunk_data = b""
+                    async for audio_chunk in self.hybrid_tts.synthesize_stream(
+                        ssml_text,
+                        self.voice_profile,
+                        use_ssml=use_ssml,
+                        priority=priority,
+                        cancel_event=cancel_event
+                    ):
+                        chunk_data += audio_chunk
+
+                        # Check for cancellation during generation
+                        if cancel_event and cancel_event.is_set():
+                            logger.info(f"Streaming TTS cancelled during chunk {i+1}/{len(sentences)}")
+                            return
+
+                    # Cache the result
+                    if self.use_cache and chunk_data:
+                        cache_tts_audio(
+                            sentence,
+                            self.voice_profile.voice_id,
+                            self.voice_profile.rate,
+                            self.voice_profile.pitch,
+                            chunk_data
+                        )
 
                 # Yield complete sentence audio
                 if chunk_data:
-                    logger.debug(f"Yielding chunk {i+1}/{len(sentences)} ({len(chunk_data)} bytes)")
+                    logger.debug(f"✓ Yielding chunk {i+1}/{len(sentences)} ({len(chunk_data)} bytes)")
                     yield chunk_data
                 else:
                     logger.warning(f"No audio generated for chunk {i+1}: '{sentence}'")
@@ -244,41 +326,77 @@ class StreamingTTSService:
                 # Continue with next sentence even if one fails
                 continue
 
-        logger.info(f"Streaming TTS completed ({len(sentences)} chunks)")
+        logger.info(f"✅ Streaming TTS completed ({len(sentences)} chunks)")
 
-    async def synthesize_full(self, text: str) -> Optional[bytes]:
+    async def synthesize_full(
+        self,
+        text: str,
+        priority: str = "normal"
+    ) -> Optional[bytes]:
         """Generate complete audio (non-streaming fallback).
 
         Args:
             text: Text to synthesize
+            priority: Quality priority ("normal", "premium", "ultra")
 
         Returns:
             Complete audio data or None on error
         """
-        if not self.enabled:
-            logger.error("Streaming TTS not available")
-            return None
+        # Normalize text
+        normalized_text = normalize_arabic_text(text)
 
-        if not text or not text.strip():
-            logger.warning("Empty text provided for TTS")
+        if not normalized_text.strip():
+            logger.warning("Empty text after normalization")
             return None
 
         try:
-            logger.info("Generating full audio (non-streaming)")
+            logger.info(f"Generating full audio | Voice: {self.voice_profile.voice_id}")
 
-            communicate = edge_tts.Communicate(
-                text=text,
-                voice=self.voice,
-                rate=self.rate,
-                volume=self.volume
+            # Check cache first
+            if self.use_cache:
+                cached_audio = get_cached_tts_audio(
+                    normalized_text,
+                    self.voice_profile.voice_id,
+                    self.voice_profile.rate,
+                    self.voice_profile.pitch
+                )
+
+                if cached_audio:
+                    logger.debug(f"✓ Cache HIT for full audio")
+                    return cached_audio
+
+            # Generate SSML if enabled
+            if self.settings.use_ssml and not normalized_text.strip().startswith("<speak"):
+                ssml_text = generate_ssml(
+                    normalized_text,
+                    self.voice_profile,
+                    self.dialect,
+                    use_lexicon=True
+                )
+                use_ssml = True
+            else:
+                ssml_text = normalized_text
+                use_ssml = False
+
+            # Synthesize using hybrid TTS
+            audio_data = await self.hybrid_tts.synthesize(
+                ssml_text,
+                self.voice_profile,
+                use_ssml=use_ssml,
+                priority=priority
             )
 
-            audio_data = b""
-            async for chunk in communicate.stream():
-                if chunk["type"] == "audio":
-                    audio_data += chunk["data"]
+            # Cache the result
+            if self.use_cache and audio_data:
+                cache_tts_audio(
+                    normalized_text,
+                    self.voice_profile.voice_id,
+                    self.voice_profile.rate,
+                    self.voice_profile.pitch,
+                    audio_data
+                )
 
-            logger.info(f"Generated full audio ({len(audio_data)} bytes)")
+            logger.info(f"✅ Generated full audio ({len(audio_data)} bytes)")
             return audio_data
 
         except Exception as e:
@@ -289,13 +407,18 @@ class StreamingTTSService:
         """Get current configuration.
 
         Returns:
-            Configuration dictionary
+            Configuration dictionary with dialect support
         """
         return {
-            "enabled": self.enabled,
-            "voice": self.voice,
-            "rate": self.rate,
-            "volume": self.volume,
+            "dialect": self.dialect,
+            "gender": self.gender,
+            "voice_id": self.voice_profile.voice_id,
+            "display_name": self.voice_profile.display_name,
+            "rate": self.voice_profile.rate,
+            "pitch": self.voice_profile.pitch,
+            "volume": self.voice_profile.volume,
             "min_chunk_chars": self.min_chunk_chars,
-            "max_chunk_chars": self.max_chunk_chars
+            "max_chunk_chars": self.max_chunk_chars,
+            "cache_enabled": self.use_cache,
+            "ssml_enabled": self.settings.use_ssml
         }

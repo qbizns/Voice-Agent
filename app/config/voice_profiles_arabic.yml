@@ -1,0 +1,333 @@
+# Arabic Voice Profiles Configuration
+# 32 voices across 16 countries/dialects
+# Default: Egyptian Arabic (ar-EG-SalmaNeural)
+
+# ==========================================
+# EGYPTIAN ARABIC (DEFAULT)
+# ==========================================
+arabic_egypt:
+  label: "Egyptian / مصري"
+  lang: "ar-EG"
+  flag: "🇪🇬"
+  region: "Egypt"
+  male:
+    voice_id: "ar-EG-ShakirNeural"
+    display_name: "Egyptian Male (Shakir)"
+    rate: "+0%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Natural Egyptian male voice with authentic Cairo accent"
+  female:
+    voice_id: "ar-EG-SalmaNeural"
+    display_name: "Egyptian Female (Salma)"
+    rate: "+0%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Warm Egyptian female voice, perfect for conversational AI"
+
+# ==========================================
+# SAUDI ARABIC
+# ==========================================
+arabic_saudi:
+  label: "Saudi / سعودي"
+  lang: "ar-SA"
+  flag: "🇸🇦"
+  region: "Saudi Arabia"
+  male:
+    voice_id: "ar-SA-HamedNeural"
+    display_name: "Saudi Male (Hamed)"
+    rate: "+0%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Saudi male voice with Riyadh accent"
+  female:
+    voice_id: "ar-SA-ZariyahNeural"
+    display_name: "Saudi Female (Zariyah)"
+    rate: "+0%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Saudi female voice, professional and clear"
+
+# ==========================================
+# GULF ARABIC (UAE)
+# ==========================================
+arabic_gulf:
+  label: "Gulf / خليجي"
+  lang: "ar-AE"
+  flag: "🇦🇪"
+  region: "UAE / Gulf States"
+  male:
+    voice_id: "ar-AE-HamdanNeural"
+    display_name: "Gulf Male (UAE - Hamdan)"
+    rate: "+0%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Emirati male voice with Gulf accent"
+  female:
+    voice_id: "ar-AE-FatimaNeural"
+    display_name: "Gulf Female (UAE - Fatima)"
+    rate: "+0%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Emirati female voice, elegant and modern"
+
+# ==========================================
+# LEVANTINE ARABIC (Jordan/Lebanon)
+# ==========================================
+arabic_levantine:
+  label: "Levantine / شامي"
+  lang: "ar-JO"
+  flag: "🇯🇴"
+  region: "Levant (Jordan, Lebanon, Syria)"
+  male:
+    voice_id: "ar-JO-TaimNeural"
+    display_name: "Levantine Male (Jordan - Taim)"
+    rate: "+0%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Jordanian male voice with Levantine accent"
+  female:
+    voice_id: "ar-LB-LaylaNeural"
+    display_name: "Levantine Female (Lebanon - Layla)"
+    rate: "+0%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Lebanese female voice, warm and expressive"
+
+# ==========================================
+# MAGHREBI ARABIC (Morocco)
+# ==========================================
+arabic_maghrebi:
+  label: "Maghrebi / مغربي"
+  lang: "ar-MA"
+  flag: "🇲🇦"
+  region: "Maghreb (Morocco, Algeria, Tunisia)"
+  male:
+    voice_id: "ar-MA-JamalNeural"
+    display_name: "Maghrebi Male (Morocco - Jamal)"
+    rate: "+0%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Moroccan male voice with Maghrebi accent"
+  female:
+    voice_id: "ar-MA-MounaNeural"
+    display_name: "Maghrebi Female (Morocco - Mouna)"
+    rate: "+0%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Moroccan female voice with Darija influence"
+
+# ==========================================
+# ADDITIONAL GULF STATES
+# ==========================================
+arabic_bahrain:
+  label: "Bahraini / بحريني"
+  lang: "ar-BH"
+  flag: "🇧🇭"
+  region: "Bahrain"
+  male:
+    voice_id: "ar-BH-AliNeural"
+    display_name: "Bahraini Male (Ali)"
+    rate: "+0%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Bahraini male voice"
+  female:
+    voice_id: "ar-BH-LailaNeural"
+    display_name: "Bahraini Female (Laila)"
+    rate: "+0%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Bahraini female voice"
+
+arabic_kuwait:
+  label: "Kuwaiti / كويتي"
+  lang: "ar-KW"
+  flag: "🇰🇼"
+  region: "Kuwait"
+  male:
+    voice_id: "ar-KW-FahedNeural"
+    display_name: "Kuwaiti Male (Fahed)"
+    rate: "+0%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Kuwaiti male voice"
+  female:
+    voice_id: "ar-KW-NouraNeural"
+    display_name: "Kuwaiti Female (Noura)"
+    rate: "+0%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Kuwaiti female voice"
+
+arabic_oman:
+  label: "Omani / عماني"
+  lang: "ar-OM"
+  flag: "🇴🇲"
+  region: "Oman"
+  male:
+    voice_id: "ar-OM-AbdullahNeural"
+    display_name: "Omani Male (Abdullah)"
+    rate: "+0%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Omani male voice"
+  female:
+    voice_id: "ar-OM-AyshaNeural"
+    display_name: "Omani Female (Aysha)"
+    rate: "+0%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Omani female voice"
+
+arabic_qatar:
+  label: "Qatari / قطري"
+  lang: "ar-QA"
+  flag: "🇶🇦"
+  region: "Qatar"
+  male:
+    voice_id: "ar-QA-MoazNeural"
+    display_name: "Qatari Male (Moaz)"
+    rate: "+0%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Qatari male voice"
+  female:
+    voice_id: "ar-QA-AmalNeural"
+    display_name: "Qatari Female (Amal)"
+    rate: "+0%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Qatari female voice"
+
+# ==========================================
+# ADDITIONAL LEVANTINE
+# ==========================================
+arabic_syria:
+  label: "Syrian / سوري"
+  lang: "ar-SY"
+  flag: "🇸🇾"
+  region: "Syria"
+  male:
+    voice_id: "ar-SY-LaithNeural"
+    display_name: "Syrian Male (Laith)"
+    rate: "+0%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Syrian male voice"
+  female:
+    voice_id: "ar-SY-AmanyNeural"
+    display_name: "Syrian Female (Amany)"
+    rate: "+0%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Syrian female voice"
+
+# ==========================================
+# MESOPOTAMIAN
+# ==========================================
+arabic_iraq:
+  label: "Iraqi / عراقي"
+  lang: "ar-IQ"
+  flag: "🇮🇶"
+  region: "Iraq"
+  male:
+    voice_id: "ar-IQ-BasselNeural"
+    display_name: "Iraqi Male (Bassel)"
+    rate: "+0%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Iraqi male voice with Mesopotamian accent"
+  female:
+    voice_id: "ar-IQ-RanaNeural"
+    display_name: "Iraqi Female (Rana)"
+    rate: "+0%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Iraqi female voice"
+
+# ==========================================
+# ADDITIONAL MAGHREBI
+# ==========================================
+arabic_algeria:
+  label: "Algerian / جزائري"
+  lang: "ar-DZ"
+  flag: "🇩🇿"
+  region: "Algeria"
+  male:
+    voice_id: "ar-DZ-IsmaelNeural"
+    display_name: "Algerian Male (Ismael)"
+    rate: "+0%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Algerian male voice"
+  female:
+    voice_id: "ar-DZ-AminaNeural"
+    display_name: "Algerian Female (Amina)"
+    rate: "+0%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Algerian female voice"
+
+arabic_tunisia:
+  label: "Tunisian / تونسي"
+  lang: "ar-TN"
+  flag: "🇹🇳"
+  region: "Tunisia"
+  male:
+    voice_id: "ar-TN-HediNeural"
+    display_name: "Tunisian Male (Hedi)"
+    rate: "+0%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Tunisian male voice"
+  female:
+    voice_id: "ar-TN-ReemNeural"
+    display_name: "Tunisian Female (Reem)"
+    rate: "+0%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Tunisian female voice"
+
+arabic_libya:
+  label: "Libyan / ليبي"
+  lang: "ar-LY"
+  flag: "🇱🇾"
+  region: "Libya"
+  male:
+    voice_id: "ar-LY-OmarNeural"
+    display_name: "Libyan Male (Omar)"
+    rate: "+0%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Libyan male voice"
+  female:
+    voice_id: "ar-LY-ImanNeural"
+    display_name: "Libyan Female (Iman)"
+    rate: "+0%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Libyan female voice"
+
+# ==========================================
+# ARABIAN PENINSULA
+# ==========================================
+arabic_yemen:
+  label: "Yemeni / يمني"
+  lang: "ar-YE"
+  flag: "🇾🇪"
+  region: "Yemen"
+  male:
+    voice_id: "ar-YE-SalehNeural"
+    display_name: "Yemeni Male (Saleh)"
+    rate: "+0%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Yemeni male voice"
+  female:
+    voice_id: "ar-YE-MaryamNeural"
+    display_name: "Yemeni Female (Maryam)"
+    rate: "+0%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Yemeni female voice"

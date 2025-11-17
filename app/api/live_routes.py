@@ -82,7 +82,7 @@ async def serve_live_page():
 
 
 class LiveSession:
-    """Manages a live audio streaming session."""
+    """Manages a live audio streaming session with dialect support."""
 
     def __init__(
         self,
@@ -90,9 +90,11 @@ class LiveSession:
         sample_rate: int = 16000,
         channels: int = 1,
         use_vad: bool = True,
-        vad_service: Optional[VADService] = None
+        vad_service: Optional[VADService] = None,
+        dialect: Optional[str] = None,
+        gender: Optional[str] = None
     ):
-        """Initialize session.
+        """Initialize session with dialect support.
 
         Args:
             session_id: Unique session identifier
@@ -100,6 +102,8 @@ class LiveSession:
             channels: Number of audio channels
             use_vad: Enable voice activity detection
             vad_service: VAD service instance
+            dialect: TTS dialect (e.g., "arabic_egypt", "arabic_saudi")
+            gender: TTS voice gender ("male" or "female")
         """
         self.session_id = session_id
         self.sample_rate = sample_rate
@@ -107,6 +111,18 @@ class LiveSession:
         self.audio_buffer = bytearray()
         self.is_active = True
         self.start_time = time.time()
+
+        # Voice settings
+        self.dialect = dialect
+        self.gender = gender
+
+        # Create session-specific streaming TTS service
+        from app.core.config import get_settings
+        settings = get_settings()
+        self.streaming_tts = StreamingTTSService(
+            dialect=dialect or settings.default_tts_dialect,
+            gender=gender or settings.default_tts_gender
+        )
 
         # Interruption state
         self.is_ai_responding = False
@@ -122,7 +138,11 @@ class LiveSession:
         else:
             logger.info(f"VAD disabled for session {session_id}")
 
-        logger.info(f"Live session started: {session_id} ({sample_rate}Hz, {channels}ch)")
+        logger.info(
+            f"Live session started: {session_id} | "
+            f"Audio: {sample_rate}Hz/{channels}ch | "
+            f"Voice: {self.streaming_tts.dialect} ({self.streaming_tts.gender})"
+        )
 
     def add_audio_chunk(self, pcm16_bytes: bytes) -> dict:
         """Add audio chunk to buffer and process VAD.
@@ -188,6 +208,38 @@ class LiveSession:
     def is_cancelled(self) -> bool:
         """Check if current operation should be cancelled."""
         return self.cancel_event.is_set()
+
+    def update_voice(self, dialect: Optional[str] = None, gender: Optional[str] = None) -> dict:
+        """Update TTS voice settings dynamically.
+
+        Args:
+            dialect: New dialect (None to keep current)
+            gender: New gender (None to keep current)
+
+        Returns:
+            Updated voice configuration
+        """
+        if dialect:
+            self.dialect = dialect
+        if gender:
+            self.gender = gender
+
+        # Update the streaming TTS service
+        self.streaming_tts.update_voice(dialect=dialect, gender=gender)
+
+        voice_info = {
+            "dialect": self.streaming_tts.dialect,
+            "gender": self.streaming_tts.gender,
+            "voice_id": self.streaming_tts.voice_profile.voice_id,
+            "display_name": self.streaming_tts.voice_profile.display_name
+        }
+
+        logger.info(
+            f"Session {self.session_id}: Voice updated → "
+            f"{voice_info['dialect']} ({voice_info['gender']}) - {voice_info['voice_id']}"
+        )
+
+        return voice_info
 
     def close(self) -> None:
         """Close session."""
@@ -265,9 +317,9 @@ async def process_and_respond(
                     text_length=len(response_text)
                 )
 
-        elif ENABLE_STREAMING and streaming_tts_service and streaming_tts_service.enabled:
+        elif ENABLE_STREAMING and session.streaming_tts:
             # Streaming mode - generate and stream audio chunks
-            logger.info("Using STREAMING response generation")
+            logger.info(f"Using STREAMING response | Voice: {session.streaming_tts.voice_profile.voice_id}")
 
             # Get conversation history if context service available
             conversation_history = None
@@ -304,7 +356,7 @@ async def process_and_respond(
 
                 # Stream TTS for this text chunk
                 tts_start = time.perf_counter()
-                async for audio_chunk in streaming_tts_service.synthesize_stream(
+                async for audio_chunk in session.streaming_tts.synthesize_stream(
                     text=text_chunk,
                     cancel_event=session.cancel_event
                 ):
@@ -537,20 +589,30 @@ async def websocket_live_stream(websocket: WebSocket) -> None:
                     sample_rate = data.get("sample_rate", 16000)
                     channels = data.get("channels", 1)
                     use_vad = data.get("use_vad", True)
+                    dialect = data.get("dialect")  # Optional: e.g., "arabic_egypt"
+                    gender = data.get("gender")    # Optional: "male" or "female"
 
                     session = LiveSession(
                         session_id,
                         sample_rate,
                         channels,
                         use_vad=use_vad,
-                        vad_service=vad_service
+                        vad_service=vad_service,
+                        dialect=dialect,
+                        gender=gender
                     )
 
                     await websocket.send_json({
                         "type": "session_started",
                         "data": {
                             "session_id": session_id,
-                            "vad_enabled": session.use_vad
+                            "vad_enabled": session.use_vad,
+                            "voice": {
+                                "dialect": session.streaming_tts.dialect,
+                                "gender": session.streaming_tts.gender,
+                                "voice_id": session.streaming_tts.voice_profile.voice_id,
+                                "display_name": session.streaming_tts.voice_profile.display_name
+                            }
                         }
                     })
 
@@ -558,7 +620,11 @@ async def websocket_live_stream(websocket: WebSocket) -> None:
                     if metrics_service:
                         metrics_service.start_session(session_id)
 
-                    logger.info(f"Session {session_id} started (VAD: {session.use_vad})")
+                    logger.info(
+                        f"Session {session_id} started | "
+                        f"VAD: {session.use_vad} | "
+                        f"Voice: {session.streaming_tts.dialect} ({session.streaming_tts.gender})"
+                    )
 
                 elif msg_type == "interrupt":
                     # Interrupt current AI response
@@ -572,6 +638,50 @@ async def websocket_live_stream(websocket: WebSocket) -> None:
                         "data": {"session_id": session.session_id}
                     })
                     logger.info(f"Session {session.session_id}: Interrupted")
+
+                elif msg_type == "update_voice":
+                    # Update TTS voice settings
+                    if not session or not session.is_active:
+                        logger.warning("Received update_voice without active session")
+                        await websocket.send_json({
+                            "type": "error",
+                            "data": {"message": "No active session"}
+                        })
+                        continue
+
+                    data = message.get("data", {})
+                    dialect = data.get("dialect")
+                    gender = data.get("gender")
+
+                    if not dialect and not gender:
+                        await websocket.send_json({
+                            "type": "error",
+                            "data": {"message": "Must specify dialect or gender"}
+                        })
+                        continue
+
+                    try:
+                        voice_info = session.update_voice(dialect=dialect, gender=gender)
+
+                        await websocket.send_json({
+                            "type": "voice_updated",
+                            "data": {
+                                "session_id": session.session_id,
+                                "voice": voice_info
+                            }
+                        })
+
+                        logger.info(
+                            f"Session {session.session_id}: Voice updated to "
+                            f"{voice_info['dialect']} ({voice_info['gender']}) - {voice_info['voice_id']}"
+                        )
+
+                    except Exception as e:
+                        logger.error(f"Failed to update voice: {e}")
+                        await websocket.send_json({
+                            "type": "error",
+                            "data": {"message": f"Failed to update voice: {str(e)}"}
+                        })
 
                 elif msg_type == "audio_chunk":
                     # Receive audio chunk
