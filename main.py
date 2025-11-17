@@ -11,6 +11,7 @@ from app.core.config import get_settings
 from app.core.logging import setup_logging
 from app.api import routes
 from app.api import live_routes
+from app.api import admin_routes
 from app.services.stt_service import STTService
 from app.services.tts_service import TTSService
 from app.services.streaming_tts_service import StreamingTTSService
@@ -20,6 +21,7 @@ from app.services.lipsync_service import LipSyncService
 from app.services.vad_service import VADService
 from app.services.context_service import ContextService
 from app.services.cache_service import ResponseCache
+from app.services.metrics_service import MetricsService
 
 
 # Initialize services
@@ -32,12 +34,13 @@ lipsync_service: LipSyncService | None = None
 vad_service: VADService | None = None
 context_service: ContextService | None = None
 cache_service: ResponseCache | None = None
+metrics_service: MetricsService | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
-    global stt_service, tts_service, streaming_tts_service, knowledge_base, ai_agent, lipsync_service, vad_service, context_service, cache_service
+    global stt_service, tts_service, streaming_tts_service, knowledge_base, ai_agent, lipsync_service, vad_service, context_service, cache_service, metrics_service
 
     # Setup logging
     setup_logging()
@@ -120,14 +123,24 @@ async def lifespan(app: FastAPI):
         )
         logger.info("Response cache enabled with semantic similarity matching")
 
+        # Initialize Metrics Service
+        logger.info("Initializing Metrics service...")
+        metrics_service = MetricsService(
+            max_request_history=1000,
+            aggregation_window_seconds=60
+        )
+        logger.info("Metrics service enabled for monitoring and analytics")
+
         # Set services in routes
         routes.set_services(stt_service, tts_service, ai_agent, knowledge_base, lipsync_service)
-        live_routes.set_services(stt_service, tts_service, ai_agent, knowledge_base, vad_service, context_service, cache_service, streaming_tts_service)
+        live_routes.set_services(stt_service, tts_service, ai_agent, knowledge_base, vad_service, context_service, cache_service, streaming_tts_service, metrics_service)
+        admin_routes.set_services(metrics_service, cache_service, context_service)
 
         logger.info("All services initialized successfully!")
         logger.info(f"Server ready at http://{settings.host}:{settings.port}")
         logger.info(f"WebSocket endpoint: ws://{settings.host}:{settings.port}/ws/conversation")
         logger.info(f"Live demo page: http://{settings.host}:{settings.port}/live")
+        logger.info(f"Admin dashboard: http://{settings.host}:{settings.port}/admin")
 
     except Exception as e:
         logger.error(f"Failed to initialize services: {e}")
@@ -163,6 +176,7 @@ app.add_middleware(
 # Include routes
 app.include_router(routes.router, prefix="/api/v1", tags=["voice-agent"])
 app.include_router(live_routes.router, tags=["live-demo"])
+app.include_router(admin_routes.router, tags=["admin"])
 
 
 @app.get("/")

@@ -20,6 +20,7 @@ from app.services.knowledge_base import KnowledgeBase
 from app.services.vad_service import VADService, StreamingVAD
 from app.services.context_service import ContextService
 from app.services.cache_service import ResponseCache
+from app.services.metrics_service import MetricsService
 
 # Initialize services (will be set by main app)
 stt_service: Optional[STTService] = None
@@ -30,6 +31,7 @@ knowledge_base: Optional[KnowledgeBase] = None
 vad_service: Optional[VADService] = None
 context_service: Optional[ContextService] = None
 cache_service: Optional[ResponseCache] = None
+metrics_service: Optional[MetricsService] = None
 
 # Streaming configuration
 ENABLE_STREAMING = True  # Feature flag to enable/disable streaming
@@ -43,10 +45,11 @@ def set_services(
     vad: Optional[VADService] = None,
     context: Optional[ContextService] = None,
     cache: Optional[ResponseCache] = None,
-    streaming_tts: Optional[StreamingTTSService] = None
+    streaming_tts: Optional[StreamingTTSService] = None,
+    metrics: Optional[MetricsService] = None
 ) -> None:
     """Set service instances."""
-    global stt_service, tts_service, streaming_tts_service, ai_agent, knowledge_base, vad_service, context_service, cache_service
+    global stt_service, tts_service, streaming_tts_service, ai_agent, knowledge_base, vad_service, context_service, cache_service, metrics_service
     stt_service = stt
     tts_service = tts
     streaming_tts_service = streaming_tts
@@ -55,6 +58,7 @@ def set_services(
     vad_service = vad
     context_service = context
     cache_service = cache
+    metrics_service = metrics
 
 
 router = APIRouter()
@@ -247,6 +251,20 @@ async def process_and_respond(
                 }
             })
 
+            # Record metrics
+            if metrics_service:
+                metrics_service.record_request(
+                    session_id=session.session_id,
+                    stt_time_ms=stt_time,
+                    ai_time_ms=ai_time,
+                    tts_time_ms=tts_time,
+                    total_time_ms=total_time,
+                    success=True,
+                    cache_hit=True,
+                    streaming=False,
+                    text_length=len(response_text)
+                )
+
         elif ENABLE_STREAMING and streaming_tts_service and streaming_tts_service.enabled:
             # Streaming mode - generate and stream audio chunks
             logger.info("Using STREAMING response generation")
@@ -355,6 +373,20 @@ async def process_and_respond(
                     assistant_metadata={"sources": sources}
                 )
 
+            # Record metrics
+            if metrics_service:
+                metrics_service.record_request(
+                    session_id=session.session_id,
+                    stt_time_ms=stt_time,
+                    ai_time_ms=ai_time,
+                    tts_time_ms=0.0,  # Streaming TTS time not individually measured
+                    total_time_ms=total_time,
+                    success=True,
+                    cache_hit=False,
+                    streaming=True,
+                    text_length=len(full_response_text)
+                )
+
             response_text = full_response_text
 
         else:
@@ -438,6 +470,20 @@ async def process_and_respond(
                     assistant_metadata={"sources": sources}
                 )
 
+            # Record metrics
+            if metrics_service:
+                metrics_service.record_request(
+                    session_id=session.session_id,
+                    stt_time_ms=stt_time,
+                    ai_time_ms=ai_time,
+                    tts_time_ms=tts_time,
+                    total_time_ms=total_time,
+                    success=True,
+                    cache_hit=False,
+                    streaming=False,
+                    text_length=len(response_text)
+                )
+
         # Clear buffer for next utterance
         session.clear_buffer()
 
@@ -507,6 +553,10 @@ async def websocket_live_stream(websocket: WebSocket) -> None:
                             "vad_enabled": session.use_vad
                         }
                     })
+
+                    # Start tracking session metrics
+                    if metrics_service:
+                        metrics_service.start_session(session_id)
 
                     logger.info(f"Session {session_id} started (VAD: {session.use_vad})")
 
@@ -704,6 +754,10 @@ async def websocket_live_stream(websocket: WebSocket) -> None:
     finally:
         if session:
             session.close()
+
+            # End session metrics tracking
+            if metrics_service:
+                metrics_service.end_session(session.session_id)
 
         try:
             await websocket.close()
