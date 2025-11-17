@@ -16,6 +16,9 @@ from app.services.tts_service import TTSService
 from app.services.knowledge_base import KnowledgeBase
 from app.services.ai_agent import AIAgent
 from app.services.lipsync_service import LipSyncService
+from app.services.vad_service import VADService
+from app.services.context_service import ContextService
+from app.services.cache_service import ResponseCache
 
 
 # Initialize services
@@ -24,12 +27,15 @@ tts_service: TTSService | None = None
 knowledge_base: KnowledgeBase | None = None
 ai_agent: AIAgent | None = None
 lipsync_service: LipSyncService | None = None
+vad_service: VADService | None = None
+context_service: ContextService | None = None
+cache_service: ResponseCache | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
-    global stt_service, tts_service, knowledge_base, ai_agent, lipsync_service
+    global stt_service, tts_service, knowledge_base, ai_agent, lipsync_service, vad_service, context_service, cache_service
 
     # Setup logging
     setup_logging()
@@ -75,9 +81,38 @@ async def lifespan(app: FastAPI):
         else:
             logger.warning("Lip-sync disabled (Rhubarb not found)")
 
+        # Initialize VAD Service
+        logger.info("Initializing Voice Activity Detection service...")
+        vad_service = VADService(
+            threshold=0.5,
+            sampling_rate=16000,
+            min_silence_duration_ms=800
+        )
+        if vad_service.enabled:
+            logger.info("VAD enabled with Silero")
+        else:
+            logger.warning("VAD disabled (Silero not available)")
+
+        # Initialize Context Service
+        logger.info("Initializing Conversation Context service...")
+        context_service = ContextService(
+            max_history_per_session=10,
+            session_timeout_seconds=1800  # 30 minutes
+        )
+        logger.info("Context service enabled for multi-turn conversations")
+
+        # Initialize Response Cache Service
+        logger.info("Initializing Response Cache service...")
+        cache_service = ResponseCache(
+            max_entries=1000,
+            default_ttl_seconds=3600,  # 1 hour
+            similarity_threshold=0.85
+        )
+        logger.info("Response cache enabled with semantic similarity matching")
+
         # Set services in routes
         routes.set_services(stt_service, tts_service, ai_agent, knowledge_base, lipsync_service)
-        live_routes.set_services(stt_service, tts_service, ai_agent, knowledge_base)
+        live_routes.set_services(stt_service, tts_service, ai_agent, knowledge_base, vad_service, context_service, cache_service)
 
         logger.info("All services initialized successfully!")
         logger.info(f"Server ready at http://{settings.host}:{settings.port}")

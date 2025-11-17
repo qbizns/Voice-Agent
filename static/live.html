@@ -138,6 +138,50 @@
             color: #00ff88;
         }
 
+        .vad-indicator {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 10px 20px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            z-index: 10;
+            transition: all 0.3s;
+        }
+
+        .vad-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #666;
+            transition: all 0.3s;
+        }
+
+        .vad-dot.speaking {
+            background: #00ff88;
+            box-shadow: 0 0 20px #00ff88;
+            animation: pulse-vad 1s ease-in-out infinite;
+        }
+
+        @keyframes pulse-vad {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.3); }
+        }
+
+        .vad-text {
+            font-size: 0.9em;
+            color: #e0e0e0;
+        }
+
+        .vad-confidence {
+            font-size: 0.85em;
+            color: #888;
+            margin-left: 10px;
+        }
+
         .transcript-section {
             display: flex;
             flex-direction: column;
@@ -310,6 +354,11 @@
         <div class="main-area">
             <div class="visualizer-section">
                 <div class="recording-indicator" id="recordingIndicator">● RECORDING</div>
+                <div class="vad-indicator" id="vadIndicator" style="display: none;">
+                    <div class="vad-dot" id="vadDot"></div>
+                    <div class="vad-text" id="vadText">صامت</div>
+                    <div class="vad-confidence" id="vadConfidence"></div>
+                </div>
                 <canvas id="waveformCanvas"></canvas>
                 <button id="startButton" class="start-button">🎤 ابدأ المحادثة</button>
                 <div id="status" class="status">انقر للبدء</div>
@@ -382,6 +431,7 @@
         let isRecording = false;
         let sessionId = null;
         let audioChunks = [];
+        let vadEnabled = false;
 
         // DOM Elements
         const startButton = document.getElementById('startButton');
@@ -393,6 +443,10 @@
         const logArea = document.getElementById('logArea');
         const metricsDiv = document.getElementById('metrics');
         const recordingIndicator = document.getElementById('recordingIndicator');
+        const vadIndicator = document.getElementById('vadIndicator');
+        const vadDot = document.getElementById('vadDot');
+        const vadText = document.getElementById('vadText');
+        const vadConfidence = document.getElementById('vadConfidence');
 
         // Set canvas size
         canvas.width = canvas.offsetWidth;
@@ -431,7 +485,8 @@
                             language: 'ar',
                             session_id: sessionId,
                             sample_rate: SAMPLE_RATE,
-                            channels: CHANNELS
+                            channels: CHANNELS,
+                            use_vad: true  // Enable VAD for hands-free operation
                         }
                     };
                     ws.send(JSON.stringify(startMsg));
@@ -468,7 +523,18 @@
 
             switch (message.type) {
                 case 'session_started':
+                    vadEnabled = message.data.vad_enabled || false;
                     log('Session confirmed: ' + message.data.session_id, 'received');
+                    if (vadEnabled) {
+                        log('VAD enabled - hands-free mode active', 'success');
+                        vadIndicator.style.display = 'flex';
+                    }
+                    break;
+
+                case 'vad_status':
+                    if (vadEnabled) {
+                        updateVADIndicator(message.data);
+                    }
                     break;
 
                 case 'transcription':
@@ -510,6 +576,25 @@
                     log('Error: ' + message.data.message, 'error');
                     setStatus('خطأ: ' + message.data.message, 'error');
                     break;
+            }
+        }
+
+        // Update VAD indicator
+        function updateVADIndicator(vadData) {
+            const { is_speaking, confidence, silence_duration_ms } = vadData;
+
+            if (is_speaking) {
+                vadDot.classList.add('speaking');
+                vadText.textContent = '🗣️ يتحدث';
+                vadConfidence.textContent = `${Math.round(confidence * 100)}%`;
+            } else {
+                vadDot.classList.remove('speaking');
+                vadText.textContent = '🤫 صامت';
+                if (silence_duration_ms > 0) {
+                    vadConfidence.textContent = `${Math.round(silence_duration_ms)}ms`;
+                } else {
+                    vadConfidence.textContent = '';
+                }
             }
         }
 

@@ -90,6 +90,46 @@ class OllamaProvider(LLMProvider):
             logger.error(f"Ollama API error: {e}")
             raise RuntimeError(f"Failed to generate response: {e}")
 
+    async def generate_with_history(
+        self,
+        messages: list[dict],
+        temperature: float = 0.7,
+        max_tokens: int = 500
+    ) -> str:
+        """Generate response with conversation history.
+
+        Args:
+            messages: List of message dicts with role and content
+            temperature: Sampling temperature
+            max_tokens: Maximum tokens to generate
+
+        Returns:
+            Generated response text
+        """
+        try:
+            # Call Ollama API with full message history
+            response = await self.client.post(
+                f"{self.base_url}/api/chat",
+                json={
+                    "model": self.model,
+                    "messages": messages,
+                    "stream": False,
+                    "options": {
+                        "temperature": temperature,
+                        "num_predict": max_tokens
+                    }
+                }
+            )
+
+            response.raise_for_status()
+            result = response.json()
+
+            return result.get("message", {}).get("content", "")
+
+        except httpx.HTTPError as e:
+            logger.error(f"Ollama API error: {e}")
+            raise RuntimeError(f"Failed to generate response: {e}")
+
     async def close(self) -> None:
         """Close HTTP client."""
         await self.client.aclose()
@@ -194,13 +234,15 @@ class AIAgent:
     async def generate_response(
         self,
         message: str,
-        use_knowledge_base: bool = True
+        use_knowledge_base: bool = True,
+        conversation_history: Optional[list[dict]] = None
     ) -> tuple[str, Optional[list[str]], float]:
         """Generate response to user message.
 
         Args:
             message: User message
             use_knowledge_base: Whether to use knowledge base for context
+            conversation_history: Optional conversation history (list of {"role": "...", "content": "..."})
 
         Returns:
             Tuple of (response, sources, processing_time_ms)
@@ -229,28 +271,64 @@ class AIAgent:
             except Exception as e:
                 logger.warning(f"Failed to retrieve from knowledge base: {e}")
 
-        # Build prompt
-        if context:
-            prompt = f"""السياق من قاعدة المعرفة:
+        # Build prompt with conversation history
+        if conversation_history and hasattr(self.llm, 'generate_with_history'):
+            # Use conversation history with LLM
+            messages = []
+
+            # Add system prompt
+            if self.settings.system_prompt:
+                messages.append({"role": "system", "content": self.settings.system_prompt})
+
+            # Add conversation history
+            messages.extend(conversation_history)
+
+            # Add knowledge base context if available
+            if context:
+                current_message = f"""السياق من قاعدة المعرفة:
+{context}
+
+السؤال: {message}
+
+الرجاء الإجابة بناءً على السياق المقدم والمحادثة السابقة."""
+            else:
+                current_message = message
+
+            messages.append({"role": "user", "content": current_message})
+
+            # Generate with history
+            try:
+                response = await self.llm.generate_with_history(
+                    messages=messages,
+                    temperature=self.settings.temperature,
+                    max_tokens=self.settings.max_tokens
+                )
+            except Exception as e:
+                logger.error(f"Failed to generate with history: {e}")
+                raise
+        else:
+            # Fallback to simple generation
+            if context:
+                prompt = f"""السياق من قاعدة المعرفة:
 {context}
 
 السؤال: {message}
 
 الرجاء الإجابة بناءً على السياق المقدم. إذا لم تكن المعلومات متوفرة في السياق، قل ذلك بوضوح."""
-        else:
-            prompt = message
+            else:
+                prompt = message
 
-        # Generate response
-        try:
-            response = await self.llm.generate(
-                prompt=prompt,
-                system_prompt=self.settings.system_prompt,
-                temperature=self.settings.temperature,
-                max_tokens=self.settings.max_tokens
-            )
-        except Exception as e:
-            logger.error(f"Failed to generate response: {e}")
-            response = "عذراً، حدث خطأ أثناء معالجة طلبك."
+            # Generate response
+            try:
+                response = await self.llm.generate(
+                    prompt=prompt,
+                    system_prompt=self.settings.system_prompt,
+                    temperature=self.settings.temperature,
+                    max_tokens=self.settings.max_tokens
+                )
+            except Exception as e:
+                logger.error(f"Failed to generate response: {e}")
+                response = "عذراً، حدث خطأ أثناء معالجة طلبك."
 
         processing_time = (time.perf_counter() - start_time) * 1000
 

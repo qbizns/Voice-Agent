@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import time
+import numpy as np
 from pathlib import Path
 from typing import Optional
 
@@ -15,21 +16,38 @@ from app.services.stt_service import STTService
 from app.services.tts_service import TTSService
 from app.services.ai_agent import AIAgent
 from app.services.knowledge_base import KnowledgeBase
+from app.services.vad_service import VADService, StreamingVAD
+from app.services.context_service import ContextService
+from app.services.cache_service import ResponseCache
 
 # Initialize services (will be set by main app)
 stt_service: Optional[STTService] = None
 tts_service: Optional[TTSService] = None
 ai_agent: Optional[AIAgent] = None
 knowledge_base: Optional[KnowledgeBase] = None
+vad_service: Optional[VADService] = None
+context_service: Optional[ContextService] = None
+cache_service: Optional[ResponseCache] = None
 
 
-def set_services(stt: STTService, tts: TTSService, agent: AIAgent, kb: KnowledgeBase) -> None:
+def set_services(
+    stt: STTService,
+    tts: TTSService,
+    agent: AIAgent,
+    kb: KnowledgeBase,
+    vad: Optional[VADService] = None,
+    context: Optional[ContextService] = None,
+    cache: Optional[ResponseCache] = None
+) -> None:
     """Set service instances."""
-    global stt_service, tts_service, ai_agent, knowledge_base
+    global stt_service, tts_service, ai_agent, knowledge_base, vad_service, context_service, cache_service
     stt_service = stt
     tts_service = tts
     ai_agent = agent
     knowledge_base = kb
+    vad_service = vad
+    context_service = context
+    cache_service = cache
 
 
 router = APIRouter()
@@ -55,13 +73,22 @@ async def serve_live_page():
 class LiveSession:
     """Manages a live audio streaming session."""
 
-    def __init__(self, session_id: str, sample_rate: int = 16000, channels: int = 1):
+    def __init__(
+        self,
+        session_id: str,
+        sample_rate: int = 16000,
+        channels: int = 1,
+        use_vad: bool = True,
+        vad_service: Optional[VADService] = None
+    ):
         """Initialize session.
 
         Args:
             session_id: Unique session identifier
             sample_rate: Audio sample rate in Hz
             channels: Number of audio channels
+            use_vad: Enable voice activity detection
+            vad_service: VAD service instance
         """
         self.session_id = session_id
         self.sample_rate = sample_rate
@@ -70,16 +97,42 @@ class LiveSession:
         self.is_active = True
         self.start_time = time.time()
 
+        # VAD setup
+        self.use_vad = use_vad and vad_service is not None and vad_service.enabled
+        self.streaming_vad = None
+        if self.use_vad:
+            self.streaming_vad = StreamingVAD(vad_service, silence_duration_ms=800)
+            logger.info(f"VAD enabled for session {session_id}")
+        else:
+            logger.info(f"VAD disabled for session {session_id}")
+
         logger.info(f"Live session started: {session_id} ({sample_rate}Hz, {channels}ch)")
 
-    def add_audio_chunk(self, pcm16_bytes: bytes) -> None:
-        """Add audio chunk to buffer.
+    def add_audio_chunk(self, pcm16_bytes: bytes) -> dict:
+        """Add audio chunk to buffer and process VAD.
 
         Args:
             pcm16_bytes: PCM16 audio data
+
+        Returns:
+            VAD state dict with is_speaking, speech_ended, confidence, etc.
         """
         self.audio_buffer.extend(pcm16_bytes)
         logger.debug(f"Session {self.session_id}: buffer size = {len(self.audio_buffer)} bytes")
+
+        # Process VAD if enabled
+        if self.use_vad and self.streaming_vad:
+            # Convert PCM16 bytes to float32 numpy array
+            audio_np = np.frombuffer(pcm16_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+            vad_state = self.streaming_vad.process_audio(audio_np)
+            return vad_state
+
+        return {
+            "is_speaking": False,
+            "speech_ended": False,
+            "confidence": 0.0,
+            "silence_duration_ms": 0.0,
+        }
 
     def get_audio_data(self) -> bytes:
         """Get buffered audio data.
@@ -92,6 +145,8 @@ class LiveSession:
     def clear_buffer(self) -> None:
         """Clear audio buffer."""
         self.audio_buffer.clear()
+        if self.streaming_vad:
+            self.streaming_vad.reset()
 
     def close(self) -> None:
         """Close session."""
@@ -144,15 +199,25 @@ async def websocket_live_stream(websocket: WebSocket) -> None:
                     session_id = data.get("session_id", f"live_{int(time.time())}")
                     sample_rate = data.get("sample_rate", 16000)
                     channels = data.get("channels", 1)
+                    use_vad = data.get("use_vad", True)
 
-                    session = LiveSession(session_id, sample_rate, channels)
+                    session = LiveSession(
+                        session_id,
+                        sample_rate,
+                        channels,
+                        use_vad=use_vad,
+                        vad_service=vad_service
+                    )
 
                     await websocket.send_json({
                         "type": "session_started",
-                        "data": {"session_id": session_id}
+                        "data": {
+                            "session_id": session_id,
+                            "vad_enabled": session.use_vad
+                        }
                     })
 
-                    logger.info(f"Session {session_id} started")
+                    logger.info(f"Session {session_id} started (VAD: {session.use_vad})")
 
                 elif msg_type == "audio_chunk":
                     # Receive audio chunk
@@ -170,10 +235,151 @@ async def websocket_live_stream(websocket: WebSocket) -> None:
                     # Decode base64 PCM16
                     try:
                         pcm16_bytes = base64.b64decode(pcm16_base64)
-                        session.add_audio_chunk(pcm16_bytes)
+                        vad_state = session.add_audio_chunk(pcm16_bytes)
                         logger.debug(f"Received audio chunk: {len(pcm16_bytes)} bytes")
+
+                        # Send VAD status update
+                        if session.use_vad:
+                            await websocket.send_json({
+                                "type": "vad_status",
+                                "data": {
+                                    "is_speaking": vad_state["is_speaking"],
+                                    "confidence": vad_state["confidence"],
+                                    "silence_duration_ms": vad_state["silence_duration_ms"]
+                                }
+                            })
+
+                            # Auto-trigger processing when speech ends
+                            if vad_state["speech_ended"]:
+                                logger.info("VAD detected end of speech - auto-processing")
+
+                                # Process the complete audio (same as "end" message)
+                                audio_data = session.get_audio_data()
+
+                                if len(audio_data) == 0:
+                                    logger.warning("No audio data to process")
+                                    continue
+
+                                logger.info(f"Auto-processing {len(audio_data)} bytes of audio")
+
+                                # Process the complete pipeline
+                                start_time = time.perf_counter()
+
+                                # 1. Speech-to-Text
+                                logger.info("Running STT...")
+                                text, confidence, stt_time = await stt_service.transcribe(audio_data)
+
+                                if not text.strip():
+                                    logger.warning("No speech detected in audio")
+                                    await websocket.send_json({
+                                        "type": "transcription",
+                                        "data": {"text": "", "is_final": True}
+                                    })
+                                    session.clear_buffer()
+                                    continue
+
+                                # Send transcription
+                                await websocket.send_json({
+                                    "type": "transcription",
+                                    "data": {
+                                        "text": text,
+                                        "is_final": True,
+                                        "confidence": confidence
+                                    }
+                                })
+
+                                logger.info(f"Transcription: {text}")
+
+                                # Check cache first
+                                cached_response = None
+                                if cache_service:
+                                    cached_response = cache_service.get(text, use_semantic=True)
+
+                                if cached_response:
+                                    # Cache hit - use cached response
+                                    response_text, audio_response, sources = cached_response
+                                    logger.info("Using cached response")
+                                    ai_time = 0.0
+                                    tts_time = 0.0
+
+                                    # Encode audio to base64
+                                    audio_b64 = base64.b64encode(audio_response).decode('utf-8')
+                                else:
+                                    # Cache miss - generate new response
+                                    # 2. AI Agent with conversation context
+                                    logger.info("Running AI agent...")
+
+                                    # Get conversation history if context service available
+                                    conversation_history = None
+                                    if context_service and session:
+                                        ctx = context_service.get_or_create_context(session.session_id)
+                                        conversation_history = [
+                                            {"role": msg.role, "content": msg.content}
+                                            for msg in ctx.get_messages()
+                                        ]
+                                        logger.debug(f"Using {len(conversation_history)} messages from history")
+
+                                    response_text, sources, ai_time = await ai_agent.generate_response(
+                                        message=text,
+                                        use_knowledge_base=True,
+                                        conversation_history=conversation_history
+                                    )
+
+                                    logger.info(f"AI response: {response_text[:100]}...")
+
+                                    # 3. Text-to-Speech
+                                    logger.info("Running TTS...")
+                                    audio_response, tts_time = await tts_service.synthesize(response_text)
+
+                                    # Cache the response for future requests
+                                    if cache_service:
+                                        cache_service.put(
+                                            query=text,
+                                            response_text=response_text,
+                                            audio_data=audio_response,
+                                            audio_format="mp3",
+                                            sources=sources,
+                                            ttl_seconds=3600  # 1 hour
+                                        )
+
+                                    # Encode audio to base64
+                                    audio_b64 = base64.b64encode(audio_response).decode('utf-8')
+
+                                # Save exchange to context
+                                if context_service and session:
+                                    ctx = context_service.get_or_create_context(session.session_id)
+                                    ctx.add_exchange(
+                                        user_msg=text,
+                                        assistant_msg=response_text,
+                                        user_metadata={"confidence": confidence},
+                                        assistant_metadata={"sources": sources}
+                                    )
+
+                                total_time = (time.perf_counter() - start_time) * 1000
+
+                                # Send response
+                                await websocket.send_json({
+                                    "type": "response",
+                                    "data": {
+                                        "text": response_text,
+                                        "audio": audio_b64,
+                                        "sources": sources,
+                                        "processing_times": {
+                                            "transcription_ms": stt_time,
+                                            "ai_generation_ms": ai_time,
+                                            "synthesis_ms": tts_time,
+                                            "total_ms": total_time
+                                        }
+                                    }
+                                })
+
+                                logger.info(f"Response sent (total: {total_time:.2f}ms)")
+
+                                # Clear buffer for next utterance
+                                session.clear_buffer()
+
                     except Exception as e:
-                        logger.error(f"Failed to decode audio chunk: {e}")
+                        logger.error(f"Failed to process audio chunk: {e}")
 
                 elif msg_type == "end":
                     # End of utterance - process complete audio
@@ -224,21 +430,70 @@ async def websocket_live_stream(websocket: WebSocket) -> None:
 
                     logger.info(f"Transcription: {text}")
 
-                    # 2. AI Agent
-                    logger.info("Running AI agent...")
-                    response_text, sources, ai_time = await ai_agent.generate_response(
-                        message=text,
-                        use_knowledge_base=True
-                    )
+                    # Check cache first
+                    cached_response = None
+                    if cache_service:
+                        cached_response = cache_service.get(text, use_semantic=True)
 
-                    logger.info(f"AI response: {response_text[:100]}...")
+                    if cached_response:
+                        # Cache hit - use cached response
+                        response_text, audio_response, sources = cached_response
+                        logger.info("Using cached response")
+                        ai_time = 0.0
+                        tts_time = 0.0
 
-                    # 3. Text-to-Speech
-                    logger.info("Running TTS...")
-                    audio_response, tts_time = await tts_service.synthesize(response_text)
+                        # Encode audio to base64
+                        audio_b64 = base64.b64encode(audio_response).decode('utf-8')
+                    else:
+                        # Cache miss - generate new response
+                        # 2. AI Agent with conversation context
+                        logger.info("Running AI agent...")
 
-                    # Encode audio to base64
-                    audio_b64 = base64.b64encode(audio_response).decode('utf-8')
+                        # Get conversation history if context service available
+                        conversation_history = None
+                        if context_service and session:
+                            ctx = context_service.get_or_create_context(session.session_id)
+                            conversation_history = [
+                                {"role": msg.role, "content": msg.content}
+                                for msg in ctx.get_messages()
+                            ]
+                            logger.debug(f"Using {len(conversation_history)} messages from history")
+
+                        response_text, sources, ai_time = await ai_agent.generate_response(
+                            message=text,
+                            use_knowledge_base=True,
+                            conversation_history=conversation_history
+                        )
+
+                        logger.info(f"AI response: {response_text[:100]}...")
+
+                        # 3. Text-to-Speech
+                        logger.info("Running TTS...")
+                        audio_response, tts_time = await tts_service.synthesize(response_text)
+
+                        # Cache the response for future requests
+                        if cache_service:
+                            cache_service.put(
+                                query=text,
+                                response_text=response_text,
+                                audio_data=audio_response,
+                                audio_format="mp3",
+                                sources=sources,
+                                ttl_seconds=3600  # 1 hour
+                            )
+
+                        # Encode audio to base64
+                        audio_b64 = base64.b64encode(audio_response).decode('utf-8')
+
+                    # Save exchange to context
+                    if context_service and session:
+                        ctx = context_service.get_or_create_context(session.session_id)
+                        ctx.add_exchange(
+                            user_msg=text,
+                            assistant_msg=response_text,
+                            user_metadata={"confidence": confidence},
+                            assistant_metadata={"sources": sources}
+                        )
 
                     total_time = (time.perf_counter() - start_time) * 1000
 
