@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Agent - Live Demo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 100%);
+            color: #e0e0e0;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .container {
+            width: 90%;
+            max-width: 1200px;
+            height: 90vh;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .header {
+            text-align: center;
+            padding: 20px;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            background: linear-gradient(90deg, #00d4ff, #7000ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            color: #888;
+            font-size: 1.1em;
+        }
+
+        .main-area {
+            flex: 1;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .visualizer-section {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 20px;
+            padding: 30px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .visualizer-section::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(0, 212, 255, 0.1) 0%, transparent 70%);
+            animation: pulse 4s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); opacity: 0.3; }
+            50% { transform: scale(1.2); opacity: 0.6; }
+        }
+
+        #waveformCanvas {
+            width: 400px;
+            height: 400px;
+            border-radius: 50%;
+            position: relative;
+            z-index: 1;
+        }
+
+        .start-button {
+            background: linear-gradient(135deg, #00d4ff, #7000ff);
+            color: white;
+            border: none;
+            padding: 20px 60px;
+            font-size: 1.5em;
+            border-radius: 50px;
+            cursor: pointer;
+            transition: all 0.3s;
+            box-shadow: 0 10px 30px rgba(0, 212, 255, 0.3);
+            position: relative;
+            z-index: 2;
+            margin-top: 20px;
+        }
+
+        .start-button:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 15px 40px rgba(0, 212, 255, 0.5);
+        }
+
+        .start-button:active {
+            transform: translateY(-1px);
+        }
+
+        .start-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .status {
+            margin-top: 15px;
+            font-size: 1.1em;
+            color: #00d4ff;
+            position: relative;
+            z-index: 2;
+        }
+
+        .status.error {
+            color: #ff4444;
+        }
+
+        .status.success {
+            color: #00ff88;
+        }
+
+        .transcript-section {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            padding: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .card-header {
+            font-size: 1.3em;
+            font-weight: 600;
+            margin-bottom: 15px;
+            color: #00d4ff;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .card-header .icon {
+            font-size: 1.5em;
+        }
+
+        .card-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 10px;
+            font-size: 1.1em;
+            line-height: 1.6;
+        }
+
+        .card-content::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .card-content::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+        }
+
+        .card-content::-webkit-scrollbar-thumb {
+            background: rgba(0, 212, 255, 0.5);
+            border-radius: 10px;
+        }
+
+        .transcript-text {
+            color: #e0e0e0;
+            min-height: 60px;
+        }
+
+        .response-text {
+            color: #00ff88;
+            min-height: 60px;
+        }
+
+        .metrics {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+            padding: 15px;
+            margin-top: 10px;
+            font-size: 0.9em;
+            color: #888;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+        }
+
+        .metric-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 5px;
+        }
+
+        .metric-label {
+            color: #888;
+        }
+
+        .metric-value {
+            color: #00d4ff;
+            font-weight: 600;
+        }
+
+        .log-area {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 10px;
+            padding: 15px;
+            max-height: 150px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 0.85em;
+            margin-top: 10px;
+        }
+
+        .log-entry {
+            margin: 5px 0;
+            padding: 5px;
+            border-left: 3px solid #00d4ff;
+            padding-left: 10px;
+        }
+
+        .log-entry.sent {
+            border-left-color: #7000ff;
+        }
+
+        .log-entry.received {
+            border-left-color: #00ff88;
+        }
+
+        .log-entry.error {
+            border-left-color: #ff4444;
+        }
+
+        .timestamp {
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        .recording-indicator {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: #ff4444;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-weight: 600;
+            display: none;
+            animation: blink 1.5s infinite;
+        }
+
+        .recording-indicator.active {
+            display: block;
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        @media (max-width: 1024px) {
+            .main-area {
+                grid-template-columns: 1fr;
+            }
+
+            #waveformCanvas {
+                width: 300px;
+                height: 300px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎙️ وكيل الصوت التفاعلي</h1>
+            <p>تحدث بالعربية واحصل على إجابات فورية من الذكاء الاصطناعي</p>
+        </div>
+
+        <div class="main-area">
+            <div class="visualizer-section">
+                <div class="recording-indicator" id="recordingIndicator">● RECORDING</div>
+                <canvas id="waveformCanvas"></canvas>
+                <button id="startButton" class="start-button">🎤 ابدأ المحادثة</button>
+                <div id="status" class="status">انقر للبدء</div>
+            </div>
+
+            <div class="transcript-section">
+                <div class="card">
+                    <div class="card-header">
+                        <span class="icon">📝</span>
+                        <span>النص المكتوب (STT)</span>
+                    </div>
+                    <div class="card-content">
+                        <div id="transcriptText" class="transcript-text">
+                            في انتظار الكلام...
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="icon">🤖</span>
+                        <span>رد الوكيل الذكي</span>
+                    </div>
+                    <div class="card-content">
+                        <div id="responseText" class="response-text">
+                            في انتظار الرد...
+                        </div>
+                    </div>
+                    <div class="metrics" id="metrics" style="display: none;">
+                        <div class="metric-item">
+                            <span class="metric-label">STT:</span>
+                            <span class="metric-value" id="sttTime">-</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="metric-label">AI:</span>
+                            <span class="metric-value" id="aiTime">-</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="metric-label">TTS:</span>
+                            <span class="metric-value" id="ttsTime">-</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="metric-label">Total:</span>
+                            <span class="metric-value" id="totalTime">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="log-area" id="logArea">
+                    <div class="log-entry">Ready to start...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const WS_URL = `ws://${window.location.host}/live`;
+        const SAMPLE_RATE = 16000;
+        const CHANNELS = 1;
+        const CHUNK_DURATION_MS = 400; // 400ms chunks
+        const CHUNK_SIZE = Math.floor(SAMPLE_RATE * CHUNK_DURATION_MS / 1000);
+
+        // State
+        let ws = null;
+        let audioContext = null;
+        let analyser = null;
+        let microphone = null;
+        let scriptProcessor = null;
+        let isRecording = false;
+        let sessionId = null;
+        let audioChunks = [];
+
+        // DOM Elements
+        const startButton = document.getElementById('startButton');
+        const statusDiv = document.getElementById('status');
+        const canvas = document.getElementById('waveformCanvas');
+        const ctx = canvas.getContext('2d');
+        const transcriptText = document.getElementById('transcriptText');
+        const responseText = document.getElementById('responseText');
+        const logArea = document.getElementById('logArea');
+        const metricsDiv = document.getElementById('metrics');
+        const recordingIndicator = document.getElementById('recordingIndicator');
+
+        // Set canvas size
+        canvas.width = canvas.offsetWidth;
+        canvas.height = canvas.offsetHeight;
+
+        // Logging
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString('ar-EG');
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            entry.innerHTML = `<span class="timestamp">[${timestamp}]</span> ${message}`;
+            logArea.appendChild(entry);
+            logArea.scrollTop = logArea.scrollHeight;
+        }
+
+        // Status updates
+        function setStatus(message, type = '') {
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type}`;
+        }
+
+        // WebSocket connection
+        function connectWebSocket() {
+            return new Promise((resolve, reject) => {
+                ws = new WebSocket(WS_URL);
+
+                ws.onopen = () => {
+                    log('WebSocket connected', 'received');
+                    setStatus('متصل ✓', 'success');
+
+                    // Start session
+                    sessionId = Math.random().toString(36).substring(7);
+                    const startMsg = {
+                        type: 'start',
+                        data: {
+                            language: 'ar',
+                            session_id: sessionId,
+                            sample_rate: SAMPLE_RATE,
+                            channels: CHANNELS
+                        }
+                    };
+                    ws.send(JSON.stringify(startMsg));
+                    log('Session started: ' + sessionId, 'sent');
+                    resolve();
+                };
+
+                ws.onmessage = (event) => {
+                    try {
+                        const message = JSON.parse(event.data);
+                        handleServerMessage(message);
+                    } catch (e) {
+                        log('Error parsing message: ' + e.message, 'error');
+                    }
+                };
+
+                ws.onerror = (error) => {
+                    log('WebSocket error', 'error');
+                    setStatus('خطأ في الاتصال', 'error');
+                    reject(error);
+                };
+
+                ws.onclose = () => {
+                    log('WebSocket closed', 'error');
+                    setStatus('انقطع الاتصال', 'error');
+                    stopRecording();
+                };
+            });
+        }
+
+        // Handle server messages
+        function handleServerMessage(message) {
+            log(`Received: ${message.type}`, 'received');
+
+            switch (message.type) {
+                case 'session_started':
+                    log('Session confirmed: ' + message.data.session_id, 'received');
+                    break;
+
+                case 'transcription':
+                    const text = message.data.text;
+                    const isFinal = message.data.is_final;
+                    transcriptText.textContent = text;
+                    if (isFinal) {
+                        transcriptText.style.color = '#00ff88';
+                        log(`Transcription: "${text}"`, 'received');
+                    }
+                    break;
+
+                case 'response':
+                    const response = message.data;
+                    responseText.textContent = response.text;
+
+                    // Show metrics
+                    if (response.processing_times) {
+                        metricsDiv.style.display = 'grid';
+                        document.getElementById('sttTime').textContent =
+                            Math.round(response.processing_times.transcription_ms) + 'ms';
+                        document.getElementById('aiTime').textContent =
+                            Math.round(response.processing_times.ai_generation_ms) + 'ms';
+                        document.getElementById('ttsTime').textContent =
+                            Math.round(response.processing_times.synthesis_ms) + 'ms';
+                        document.getElementById('totalTime').textContent =
+                            Math.round(response.processing_times.total_ms) + 'ms';
+                    }
+
+                    // Play audio
+                    if (response.audio) {
+                        playAudioResponse(response.audio);
+                    }
+
+                    log(`Response received (${response.text.length} chars)`, 'received');
+                    break;
+
+                case 'error':
+                    log('Error: ' + message.data.message, 'error');
+                    setStatus('خطأ: ' + message.data.message, 'error');
+                    break;
+            }
+        }
+
+        // Play audio response
+        async function playAudioResponse(base64Audio) {
+            try {
+                log('Playing audio response...', 'info');
+
+                // Decode base64
+                const binaryString = atob(base64Audio);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+
+                // Create audio element
+                const blob = new Blob([bytes], { type: 'audio/mpeg' });
+                const url = URL.createObjectURL(blob);
+                const audio = new Audio(url);
+
+                audio.onended = () => {
+                    URL.revokeObjectURL(url);
+                    log('Audio playback finished', 'info');
+                };
+
+                await audio.play();
+            } catch (e) {
+                log('Error playing audio: ' + e.message, 'error');
+            }
+        }
+
+        // Start recording
+        async function startRecording() {
+            try {
+                setStatus('جاري طلب الإذن...', '');
+                log('Requesting microphone access...', 'info');
+
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        sampleRate: SAMPLE_RATE,
+                        channelCount: CHANNELS,
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    }
+                });
+
+                log('Microphone access granted', 'received');
+
+                // Create audio context
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                    sampleRate: SAMPLE_RATE
+                });
+
+                // Create analyser for visualization
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = 2048;
+
+                // Create microphone source
+                microphone = audioContext.createMediaStreamSource(stream);
+                microphone.connect(analyser);
+
+                // Create script processor for audio chunks
+                const bufferSize = 4096;
+                scriptProcessor = audioContext.createScriptProcessor(bufferSize, CHANNELS, CHANNELS);
+
+                let buffer = [];
+                scriptProcessor.onaudioprocess = (e) => {
+                    if (!isRecording) return;
+
+                    const inputData = e.inputBuffer.getChannelData(0);
+
+                    // Convert float32 to int16
+                    const int16Data = new Int16Array(inputData.length);
+                    for (let i = 0; i < inputData.length; i++) {
+                        const s = Math.max(-1, Math.min(1, inputData[i]));
+                        int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                    }
+
+                    buffer.push(...int16Data);
+
+                    // Send chunk when buffer reaches chunk size
+                    if (buffer.length >= CHUNK_SIZE) {
+                        const chunk = buffer.slice(0, CHUNK_SIZE);
+                        buffer = buffer.slice(CHUNK_SIZE);
+                        sendAudioChunk(chunk);
+                    }
+                };
+
+                microphone.connect(scriptProcessor);
+                scriptProcessor.connect(audioContext.destination);
+
+                // Connect WebSocket
+                await connectWebSocket();
+
+                // Start recording
+                isRecording = true;
+                recordingIndicator.classList.add('active');
+                startButton.textContent = '⏹️ إيقاف';
+                setStatus('🎙️ جارٍ التسجيل...', 'success');
+                log('Recording started', 'sent');
+
+                // Start visualization
+                visualize();
+
+            } catch (e) {
+                log('Error starting recording: ' + e.message, 'error');
+                setStatus('فشل الوصول للميكروفون', 'error');
+                console.error(e);
+            }
+        }
+
+        // Stop recording
+        function stopRecording() {
+            if (!isRecording) return;
+
+            isRecording = false;
+            recordingIndicator.classList.remove('active');
+
+            // Send end signal
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'end' }));
+                log('End signal sent', 'sent');
+            }
+
+            // Cleanup
+            if (scriptProcessor) {
+                scriptProcessor.disconnect();
+                scriptProcessor = null;
+            }
+
+            if (microphone) {
+                microphone.disconnect();
+                microphone = null;
+            }
+
+            if (audioContext) {
+                audioContext.close();
+                audioContext = null;
+            }
+
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+
+            startButton.textContent = '🎤 ابدأ المحادثة';
+            setStatus('تم الإيقاف', '');
+            log('Recording stopped', 'info');
+        }
+
+        // Send audio chunk
+        function sendAudioChunk(int16Array) {
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+            // Convert int16 to base64
+            const bytes = new Uint8Array(int16Array.buffer);
+            const base64 = btoa(String.fromCharCode(...bytes));
+
+            const message = {
+                type: 'audio_chunk',
+                data: {
+                    sample_rate: SAMPLE_RATE,
+                    channels: CHANNELS,
+                    pcm16: base64
+                }
+            };
+
+            ws.send(JSON.stringify(message));
+        }
+
+        // Visualize audio waveform
+        function visualize() {
+            if (!isRecording || !analyser) return;
+
+            requestAnimationFrame(visualize);
+
+            const bufferLength = analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+            analyser.getByteTimeDomainData(dataArray);
+
+            // Clear canvas
+            ctx.fillStyle = 'rgba(10, 14, 39, 0.3)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Draw circular waveform
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            const radius = Math.min(centerX, centerY) * 0.7;
+
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = '#00d4ff';
+            ctx.beginPath();
+
+            for (let i = 0; i < bufferLength; i++) {
+                const angle = (i / bufferLength) * Math.PI * 2;
+                const amplitude = (dataArray[i] - 128) / 128;
+                const r = radius + amplitude * 50;
+
+                const x = centerX + r * Math.cos(angle);
+                const y = centerY + r * Math.sin(angle);
+
+                if (i === 0) {
+                    ctx.moveTo(x, y);
+                } else {
+                    ctx.lineTo(x, y);
+                }
+            }
+
+            ctx.closePath();
+            ctx.stroke();
+
+            // Draw center circle
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, 10, 0, Math.PI * 2);
+            ctx.fillStyle = '#00d4ff';
+            ctx.fill();
+        }
+
+        // Start button handler
+        startButton.addEventListener('click', () => {
+            if (isRecording) {
+                stopRecording();
+            } else {
+                startRecording();
+            }
+        });
+
+        // Initial message
+        log('Page loaded. Click "ابدأ المحادثة" to start.', 'info');
+    </script>
+</body>
+</html>

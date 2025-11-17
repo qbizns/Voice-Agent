@@ -10,6 +10,7 @@ from loguru import logger
 from app.core.config import get_settings
 from app.core.logging import setup_logging
 from app.api import routes
+from app.api import live_routes
 from app.services.stt_service import STTService
 from app.services.tts_service import TTSService
 from app.services.knowledge_base import KnowledgeBase
@@ -76,10 +77,12 @@ async def lifespan(app: FastAPI):
 
         # Set services in routes
         routes.set_services(stt_service, tts_service, ai_agent, knowledge_base, lipsync_service)
+        live_routes.set_services(stt_service, tts_service, ai_agent, knowledge_base)
 
         logger.info("All services initialized successfully!")
         logger.info(f"Server ready at http://{settings.host}:{settings.port}")
         logger.info(f"WebSocket endpoint: ws://{settings.host}:{settings.port}/ws/conversation")
+        logger.info(f"Live demo page: http://{settings.host}:{settings.port}/live")
 
     except Exception as e:
         logger.error(f"Failed to initialize services: {e}")
@@ -114,6 +117,7 @@ app.add_middleware(
 
 # Include routes
 app.include_router(routes.router, prefix="/api/v1", tags=["voice-agent"])
+app.include_router(live_routes.router, tags=["live-demo"])
 
 
 @app.get("/")
