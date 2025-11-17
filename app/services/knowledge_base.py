@@ -153,26 +153,63 @@ class VectorStore:
 class KnowledgeBase:
     """Knowledge base service for document loading and retrieval."""
 
-    def __init__(self):
-        """Initialize knowledge base service."""
+    def __init__(self, lazy_load: bool = True):
+        """Initialize knowledge base service.
+        
+        Args:
+            lazy_load: If True, delay loading the embedding model until first use
+        """
         settings = get_settings()
         self.settings = settings
+        self._embedding_model = None
+        self._vector_store = None
+        self._initialized = False
+        self.lazy_load = lazy_load
 
-        # Load embedding model
-        logger.info(f"Loading embedding model: {settings.embedding_model}")
-        self.embedding_model = SentenceTransformer(settings.embedding_model)
-
-        # Initialize vector store
-        self.vector_store = VectorStore(self.embedding_model)
-
-        # Try to load existing vector store
-        vector_store_path = Path("vector_store")
-        if vector_store_path.exists():
-            self.vector_store.load(vector_store_path)
+        if not lazy_load:
+            self._initialize_model()
         else:
-            logger.info("No existing vector store found. Will create new one when documents are loaded.")
+            logger.info("Knowledge base initialized (lazy loading enabled - model will load on first use)")
 
-        logger.info("Knowledge base initialized")
+    def _initialize_model(self):
+        """Initialize the embedding model and vector store."""
+        if self._initialized:
+            return
+            
+        try:
+            # Load embedding model
+            logger.info(f"Loading embedding model: {self.settings.embedding_model}")
+            self._embedding_model = SentenceTransformer(self.settings.embedding_model)
+
+            # Initialize vector store
+            self._vector_store = VectorStore(self._embedding_model)
+
+            # Try to load existing vector store
+            vector_store_path = Path("vector_store")
+            if vector_store_path.exists():
+                self._vector_store.load(vector_store_path)
+            else:
+                logger.info("No existing vector store found. Will create new one when documents are loaded.")
+
+            self._initialized = True
+            logger.info("Knowledge base model loaded successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize knowledge base model: {e}")
+            raise
+
+    @property
+    def embedding_model(self):
+        """Lazy load embedding model on first access."""
+        if not self._initialized:
+            self._initialize_model()
+        return self._embedding_model
+
+    @property
+    def vector_store(self):
+        """Lazy load vector store on first access."""
+        if not self._initialized:
+            self._initialize_model()
+        return self._vector_store
 
     def load_documents_from_directory(self, directory: str | Path) -> None:
         """Load documents from a directory.

@@ -70,7 +70,8 @@ class OllamaProvider(LLMProvider):
         """
         self.base_url = base_url.rstrip("/")
         self.model = model
-        self.client = httpx.AsyncClient(timeout=60.0)
+        # Increased timeout for Ollama (can take 30-120 seconds for first response)
+        self.client = httpx.AsyncClient(timeout=180.0)
         logger.info(f"Ollama provider initialized: {base_url} / {model}")
 
     async def generate(
@@ -107,9 +108,16 @@ class OllamaProvider(LLMProvider):
 
             return result.get("message", {}).get("content", "")
 
+        except httpx.TimeoutException as e:
+            logger.error(f"Ollama API timeout: {e}")
+            raise RuntimeError(f"Ollama request timed out. The model may be loading or taking too long. Please try again.")
         except httpx.HTTPError as e:
             logger.error(f"Ollama API error: {e}")
-            raise RuntimeError(f"Failed to generate response: {e}")
+            logger.error(f"Error details: {str(e)}")
+            raise RuntimeError(f"Failed to generate response: {str(e)}")
+        except Exception as e:
+            logger.error(f"Unexpected error in Ollama generation: {e}")
+            raise RuntimeError(f"Unexpected error: {str(e)}")
 
     async def generate_with_history(
         self,
@@ -147,9 +155,16 @@ class OllamaProvider(LLMProvider):
 
             return result.get("message", {}).get("content", "")
 
+        except httpx.TimeoutException as e:
+            logger.error(f"Ollama API timeout: {e}")
+            raise RuntimeError(f"Ollama request timed out. The model may be loading or taking too long. Please try again.")
         except httpx.HTTPError as e:
             logger.error(f"Ollama API error: {e}")
-            raise RuntimeError(f"Failed to generate response: {e}")
+            logger.error(f"Error details: {str(e)}")
+            raise RuntimeError(f"Failed to generate response: {str(e)}")
+        except Exception as e:
+            logger.error(f"Unexpected error in Ollama generation: {e}")
+            raise RuntimeError(f"Unexpected error: {str(e)}")
 
     async def generate_stream(
         self,
@@ -195,9 +210,16 @@ class OllamaProvider(LLMProvider):
                         except json.JSONDecodeError:
                             continue
 
+        except httpx.TimeoutException as e:
+            logger.error(f"Ollama streaming API timeout: {e}")
+            raise RuntimeError(f"Ollama request timed out. The model may be loading or taking too long.")
         except httpx.HTTPError as e:
             logger.error(f"Ollama streaming API error: {e}")
-            raise RuntimeError(f"Failed to generate streaming response: {e}")
+            logger.error(f"Error details: {str(e)}")
+            raise RuntimeError(f"Failed to generate streaming response: {str(e)}")
+        except Exception as e:
+            logger.error(f"Unexpected error in Ollama streaming: {e}")
+            raise RuntimeError(f"Unexpected error: {str(e)}")
 
     async def generate_stream_with_history(
         self,
@@ -245,9 +267,16 @@ class OllamaProvider(LLMProvider):
                         except json.JSONDecodeError:
                             continue
 
+        except httpx.TimeoutException as e:
+            logger.error(f"Ollama streaming API timeout: {e}")
+            raise RuntimeError(f"Ollama request timed out. The model may be loading or taking too long.")
         except httpx.HTTPError as e:
             logger.error(f"Ollama streaming API error: {e}")
-            raise RuntimeError(f"Failed to generate streaming response: {e}")
+            logger.error(f"Error details: {str(e)}")
+            raise RuntimeError(f"Failed to generate streaming response: {str(e)}")
+        except Exception as e:
+            logger.error(f"Unexpected error in Ollama streaming: {e}")
+            raise RuntimeError(f"Unexpected error: {str(e)}")
 
     async def close(self) -> None:
         """Close HTTP client."""
@@ -463,7 +492,12 @@ class AIAgent:
                 )
             except Exception as e:
                 logger.error(f"Failed to generate response: {e}")
-                response = "عذراً، حدث خطأ أثناء معالجة طلبك."
+                logger.error(f"Error type: {type(e).__name__}, Details: {str(e)}")
+                error_msg = str(e)
+                if "timeout" in error_msg.lower():
+                    response = "عذراً، استغرق الرد وقتاً طويلاً. يرجى المحاولة مرة أخرى."
+                else:
+                    response = f"عذراً، حدث خطأ أثناء معالجة طلبك: {error_msg[:100]}"
 
         processing_time = (time.perf_counter() - start_time) * 1000
 
@@ -568,7 +602,12 @@ class AIAgent:
                     yield chunk, sources if sources else None
             except Exception as e:
                 logger.error(f"Failed to generate streaming response: {e}")
-                yield "عذراً، حدث خطأ أثناء معالجة طلبك.", None
+                logger.error(f"Error type: {type(e).__name__}, Details: {str(e)}")
+                error_msg = str(e)
+                if "timeout" in error_msg.lower():
+                    yield "عذراً، استغرق الرد وقتاً طويلاً. يرجى المحاولة مرة أخرى.", None
+                else:
+                    yield f"عذراً، حدث خطأ أثناء معالجة طلبك: {error_msg[:100]}", None
 
     async def close(self) -> None:
         """Clean up resources."""

@@ -68,19 +68,20 @@ async def lifespan(app: FastAPI):
         else:
             logger.warning("Streaming TTS disabled (edge-tts not available)")
 
-        # Initialize Knowledge Base
+        # Initialize Knowledge Base (lazy loading - documents will load on first use)
         logger.info("Initializing Knowledge Base...")
-        knowledge_base = KnowledgeBase()
-
-        # Load documents from knowledge base directory if it exists
-        kb_path = Path(settings.knowledge_base_path)
-        if kb_path.exists():
-            logger.info(f"Loading documents from {kb_path}")
-            knowledge_base.load_documents_from_directory(kb_path)
-        else:
-            logger.warning(f"Knowledge base directory not found: {kb_path}")
-            kb_path.mkdir(parents=True, exist_ok=True)
-            logger.info(f"Created knowledge base directory: {kb_path}")
+        try:
+            knowledge_base = KnowledgeBase(lazy_load=True)
+            # Create knowledge base directory if it doesn't exist (don't load documents yet)
+            kb_path = Path(settings.knowledge_base_path)
+            if not kb_path.exists():
+                kb_path.mkdir(parents=True, exist_ok=True)
+                logger.info(f"Created knowledge base directory: {kb_path}")
+            else:
+                logger.info(f"Knowledge base directory exists: {kb_path} (documents will load on first use)")
+        except Exception as e:
+            logger.warning(f"Knowledge base initialization failed (will retry on first use): {e}")
+            knowledge_base = None
 
         # Initialize AI Agent
         logger.info("Initializing AI Agent...")
@@ -94,17 +95,26 @@ async def lifespan(app: FastAPI):
         else:
             logger.warning("Lip-sync disabled (Rhubarb not found)")
 
-        # Initialize VAD Service
+        # Initialize VAD Service (non-blocking - may fail if model download is slow)
         logger.info("Initializing Voice Activity Detection service...")
-        vad_service = VADService(
-            threshold=0.5,
-            sampling_rate=16000,
-            min_silence_duration_ms=800
-        )
-        if vad_service.enabled:
-            logger.info("VAD enabled with Silero")
-        else:
-            logger.warning("VAD disabled (Silero not available)")
+        try:
+            vad_service = VADService(
+                threshold=0.5,
+                sampling_rate=16000,
+                min_silence_duration_ms=800
+            )
+            if vad_service.enabled:
+                logger.info("VAD enabled with Silero")
+            else:
+                logger.warning("VAD disabled (Silero not available)")
+        except Exception as e:
+            logger.warning(f"VAD initialization failed (will continue without VAD): {e}")
+            # Create a minimal VAD service that's disabled
+            class DummyVADService:
+                enabled = False
+                def process_chunk(self, *args, **kwargs):
+                    return False, 0.0
+            vad_service = DummyVADService()
 
         # Initialize Context Service
         logger.info("Initializing Conversation Context service...")
@@ -131,7 +141,7 @@ async def lifespan(app: FastAPI):
         )
         logger.info("Metrics service enabled for monitoring and analytics")
 
-        # Set services in routes
+        # Set services in routes (knowledge_base may be None if initialization failed)
         routes.set_services(stt_service, tts_service, ai_agent, knowledge_base, lipsync_service)
         live_routes.set_services(stt_service, tts_service, ai_agent, knowledge_base, vad_service, context_service, cache_service, streaming_tts_service, metrics_service)
         admin_routes.set_services(metrics_service, cache_service, context_service)

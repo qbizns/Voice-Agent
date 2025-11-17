@@ -416,7 +416,9 @@
 
     <script>
         // Configuration
-        const WS_URL = `ws://${window.location.host}/live`;
+        // Use ws:// for localhost, wss:// for production
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const WS_URL = `${protocol}//${window.location.host}/live`;
         const SAMPLE_RATE = 16000;
         const CHANNELS = 1;
         const CHUNK_DURATION_MS = 400; // 400ms chunks
@@ -478,6 +480,7 @@
         // WebSocket connection
         function connectWebSocket() {
             return new Promise((resolve, reject) => {
+                log('Connecting to WebSocket: ' + WS_URL, 'info');
                 ws = new WebSocket(WS_URL);
 
                 ws.onopen = () => {
@@ -511,13 +514,14 @@
                 };
 
                 ws.onerror = (error) => {
-                    log('WebSocket error', 'error');
+                    log('WebSocket error: ' + (error.message || 'Connection failed'), 'error');
+                    log('Trying to connect to: ' + WS_URL, 'error');
                     setStatus('خطأ في الاتصال', 'error');
                     reject(error);
                 };
 
-                ws.onclose = () => {
-                    log('WebSocket closed', 'error');
+                ws.onclose = (event) => {
+                    log('WebSocket closed. Code: ' + event.code + ', Reason: ' + (event.reason || 'Unknown'), 'error');
                     setStatus('انقطع الاتصال', 'error');
                     stopRecording();
                 };
@@ -909,21 +913,39 @@
         // Send audio chunk
         function sendAudioChunk(int16Array) {
             if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            if (!int16Array || int16Array.length === 0) return;
 
-            // Convert int16 to base64
-            const bytes = new Uint8Array(int16Array.buffer);
-            const base64 = btoa(String.fromCharCode(...bytes));
-
-            const message = {
-                type: 'audio_chunk',
-                data: {
-                    sample_rate: SAMPLE_RATE,
-                    channels: CHANNELS,
-                    pcm16: base64
+            try {
+                // Convert int16 to base64 (handle large arrays properly)
+                const bytes = new Uint8Array(int16Array.buffer);
+                
+                // Use binary string method for large arrays
+                let binary = '';
+                const chunkSize = 8192;
+                for (let i = 0; i < bytes.length; i += chunkSize) {
+                    const chunk = bytes.subarray(i, i + chunkSize);
+                    binary += String.fromCharCode.apply(null, chunk);
                 }
-            };
+                const base64 = btoa(binary);
 
-            ws.send(JSON.stringify(message));
+                if (!base64 || base64.length === 0) {
+                    log('Warning: Empty base64 encoding', 'error');
+                    return;
+                }
+
+                const message = {
+                    type: 'audio_chunk',
+                    data: {
+                        sample_rate: SAMPLE_RATE,
+                        channels: CHANNELS,
+                        pcm16: base64
+                    }
+                };
+
+                ws.send(JSON.stringify(message));
+            } catch (e) {
+                log('Error sending audio chunk: ' + e.message, 'error');
+            }
         }
 
         // Visualize audio waveform

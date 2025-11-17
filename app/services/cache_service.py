@@ -87,17 +87,19 @@ class ResponseCache:
         self.total_hits = 0
         self.total_misses = 0
 
-        # Try to load sentence transformer for semantic search
-        self._init_embedding_model()
-
-        logger.info(f"Response cache initialized (max={max_entries}, threshold={similarity_threshold})")
+        # Embedding model will be loaded lazily on first use
+        logger.info(f"Response cache initialized (max={max_entries}, threshold={similarity_threshold}, semantic search will load on first use)")
 
     def _init_embedding_model(self):
-        """Initialize embedding model for semantic search."""
+        """Initialize embedding model for semantic search (lazy loading)."""
+        if self.embedding_model is not None:
+            return
+            
         try:
             from sentence_transformers import SentenceTransformer
 
             # Use a lightweight multilingual model
+            logger.info("Loading embedding model for semantic search...")
             self.embedding_model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
             logger.info("Semantic search enabled with SentenceTransformer")
 
@@ -178,7 +180,9 @@ class ResponseCache:
             logger.info(f"Cache HIT (exact): '{query}' (hits={entry.hits})")
             return entry.response_text, entry.audio_data, entry.sources
 
-        # Try semantic matching if enabled
+        # Try semantic matching if enabled (lazy load model if needed)
+        if use_semantic and len(self.entries) > 0:
+            self._init_embedding_model()  # Lazy load if needed
         if use_semantic and self.embedding_model and len(self.entries) > 0:
             match = self._semantic_search(query_normalized)
             if match:
