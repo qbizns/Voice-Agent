@@ -9,6 +9,7 @@ from loguru import logger
 
 from app.core.config import get_settings
 from app.services.knowledge_base import KnowledgeBase
+from app.services.structured_knowledge import StructuredKnowledgeService
 
 
 class LLMProvider(ABC):
@@ -153,15 +154,29 @@ class LocalLLMProvider(LLMProvider):
 class AIAgent:
     """AI Agent for generating contextual responses using RAG."""
 
-    def __init__(self, knowledge_base: Optional[KnowledgeBase] = None):
+    def __init__(
+        self,
+        knowledge_base: Optional[KnowledgeBase] = None,
+        use_structured_knowledge: bool = True
+    ):
         """Initialize AI agent.
 
         Args:
             knowledge_base: Optional knowledge base for RAG
+            use_structured_knowledge: Enable structured knowledge for precise answers
         """
         settings = get_settings()
         self.settings = settings
         self.knowledge_base = knowledge_base
+
+        # Initialize structured knowledge (optional)
+        self.structured_knowledge = None
+        if use_structured_knowledge:
+            try:
+                self.structured_knowledge = StructuredKnowledgeService()
+                logger.info("Structured knowledge enabled")
+            except Exception as e:
+                logger.warning(f"Failed to initialize structured knowledge: {e}")
 
         # Initialize LLM provider
         if settings.llm_provider == "ollama":
@@ -191,6 +206,14 @@ class AIAgent:
             Tuple of (response, sources, processing_time_ms)
         """
         start_time = time.perf_counter()
+
+        # Try structured knowledge first for precise answers
+        if self.structured_knowledge:
+            structured_answer = self.structured_knowledge.query_all(message)
+            if structured_answer:
+                processing_time = (time.perf_counter() - start_time) * 1000
+                logger.info(f"Answered from structured knowledge in {processing_time:.2f}ms")
+                return structured_answer, ["structured_knowledge"], processing_time
 
         # Get context from knowledge base if enabled
         context = ""
