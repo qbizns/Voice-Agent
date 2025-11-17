@@ -432,6 +432,8 @@
         let sessionId = null;
         let audioChunks = [];
         let vadEnabled = false;
+        let isAIResponding = false;
+        let currentAudio = null;
 
         // DOM Elements
         const startButton = document.getElementById('startButton');
@@ -534,7 +536,19 @@
                 case 'vad_status':
                     if (vadEnabled) {
                         updateVADIndicator(message.data);
+
+                        // Auto-interrupt if user speaks while AI is responding
+                        if (message.data.is_speaking && isAIResponding) {
+                            log('User speech detected during AI response - interrupting', 'sent');
+                            ws.send(JSON.stringify({ type: 'interrupt' }));
+                            stopAudio();
+                        }
                     }
+                    break;
+
+                case 'interrupted':
+                    log('Response interrupted by server', 'received');
+                    stopAudio();
                     break;
 
                 case 'transcription':
@@ -598,10 +612,25 @@
             }
         }
 
+        // Stop current audio playback
+        function stopAudio() {
+            if (currentAudio) {
+                currentAudio.pause();
+                currentAudio.currentTime = 0;
+                currentAudio = null;
+            }
+            isAIResponding = false;
+            log('Audio playback stopped', 'info');
+        }
+
         // Play audio response
         async function playAudioResponse(base64Audio) {
             try {
+                // Stop any currently playing audio
+                stopAudio();
+
                 log('Playing audio response...', 'info');
+                isAIResponding = true;
 
                 // Decode base64
                 const binaryString = atob(base64Audio);
@@ -614,14 +643,26 @@
                 const blob = new Blob([bytes], { type: 'audio/mpeg' });
                 const url = URL.createObjectURL(blob);
                 const audio = new Audio(url);
+                currentAudio = audio;
 
                 audio.onended = () => {
                     URL.revokeObjectURL(url);
+                    isAIResponding = false;
+                    currentAudio = null;
                     log('Audio playback finished', 'info');
+                };
+
+                audio.onerror = () => {
+                    URL.revokeObjectURL(url);
+                    isAIResponding = false;
+                    currentAudio = null;
+                    log('Audio playback error', 'error');
                 };
 
                 await audio.play();
             } catch (e) {
+                isAIResponding = false;
+                currentAudio = null;
                 log('Error playing audio: ' + e.message, 'error');
             }
         }

@@ -97,6 +97,11 @@ class LiveSession:
         self.is_active = True
         self.start_time = time.time()
 
+        # Interruption state
+        self.is_ai_responding = False
+        self.interruption_requested = False
+        self.cancel_event = asyncio.Event()
+
         # VAD setup
         self.use_vad = use_vad and vad_service is not None and vad_service.enabled
         self.streaming_vad = None
@@ -147,6 +152,31 @@ class LiveSession:
         self.audio_buffer.clear()
         if self.streaming_vad:
             self.streaming_vad.reset()
+
+    def request_interruption(self) -> None:
+        """Request interruption of current AI response."""
+        if self.is_ai_responding:
+            logger.info(f"Session {self.session_id}: Interruption requested")
+            self.interruption_requested = True
+            self.cancel_event.set()
+
+    def start_response(self) -> None:
+        """Mark that AI is starting to respond."""
+        self.is_ai_responding = True
+        self.interruption_requested = False
+        self.cancel_event.clear()
+        logger.debug(f"Session {self.session_id}: AI response started")
+
+    def end_response(self) -> None:
+        """Mark that AI response has ended."""
+        self.is_ai_responding = False
+        self.interruption_requested = False
+        self.cancel_event.clear()
+        logger.debug(f"Session {self.session_id}: AI response ended")
+
+    def is_cancelled(self) -> bool:
+        """Check if current operation should be cancelled."""
+        return self.cancel_event.is_set()
 
     def close(self) -> None:
         """Close session."""
@@ -219,6 +249,19 @@ async def websocket_live_stream(websocket: WebSocket) -> None:
 
                     logger.info(f"Session {session_id} started (VAD: {session.use_vad})")
 
+                elif msg_type == "interrupt":
+                    # Interrupt current AI response
+                    if not session or not session.is_active:
+                        logger.warning("Received interrupt without active session")
+                        continue
+
+                    session.request_interruption()
+                    await websocket.send_json({
+                        "type": "interrupted",
+                        "data": {"session_id": session.session_id}
+                    })
+                    logger.info(f"Session {session.session_id}: Interrupted")
+
                 elif msg_type == "audio_chunk":
                     # Receive audio chunk
                     if not session or not session.is_active:
@@ -249,8 +292,20 @@ async def websocket_live_stream(websocket: WebSocket) -> None:
                                 }
                             })
 
+                            # Auto-interrupt if user speaks while AI is responding
+                            if vad_state["is_speaking"] and session.is_ai_responding:
+                                logger.info("VAD detected user speech during AI response - auto-interrupting")
+                                session.request_interruption()
+                                await websocket.send_json({
+                                    "type": "interrupted",
+                                    "data": {
+                                        "session_id": session.session_id,
+                                        "reason": "user_speech_detected"
+                                    }
+                                })
+
                             # Auto-trigger processing when speech ends
-                            if vad_state["speech_ended"]:
+                            if vad_state["speech_ended"] and not session.is_ai_responding:
                                 logger.info("VAD detected end of speech - auto-processing")
 
                                 # Process the complete audio (same as "end" message)
@@ -290,46 +345,62 @@ async def websocket_live_stream(websocket: WebSocket) -> None:
 
                                 logger.info(f"Transcription: {text}")
 
-                                # Check cache first
-                                cached_response = None
-                                if cache_service:
-                                    cached_response = cache_service.get(text, use_semantic=True)
+                                # Mark that AI is starting to respond
+                                session.start_response()
 
-                                if cached_response:
-                                    # Cache hit - use cached response
-                                    response_text, audio_response, sources = cached_response
-                                    logger.info("Using cached response")
-                                    ai_time = 0.0
-                                    tts_time = 0.0
+                                try:
+                                    # Check cache first
+                                    cached_response = None
+                                    if cache_service:
+                                        cached_response = cache_service.get(text, use_semantic=True)
 
-                                    # Encode audio to base64
-                                    audio_b64 = base64.b64encode(audio_response).decode('utf-8')
-                                else:
-                                    # Cache miss - generate new response
-                                    # 2. AI Agent with conversation context
-                                    logger.info("Running AI agent...")
+                                    if cached_response:
+                                        # Cache hit - use cached response
+                                        response_text, audio_response, sources = cached_response
+                                        logger.info("Using cached response")
+                                        ai_time = 0.0
+                                        tts_time = 0.0
 
-                                    # Get conversation history if context service available
-                                    conversation_history = None
-                                    if context_service and session:
-                                        ctx = context_service.get_or_create_context(session.session_id)
-                                        conversation_history = [
-                                            {"role": msg.role, "content": msg.content}
-                                            for msg in ctx.get_messages()
-                                        ]
-                                        logger.debug(f"Using {len(conversation_history)} messages from history")
+                                        # Encode audio to base64
+                                        audio_b64 = base64.b64encode(audio_response).decode('utf-8')
+                                    else:
+                                        # Cache miss - generate new response
+                                        # 2. AI Agent with conversation context
+                                        logger.info("Running AI agent...")
 
-                                    response_text, sources, ai_time = await ai_agent.generate_response(
-                                        message=text,
-                                        use_knowledge_base=True,
-                                        conversation_history=conversation_history
-                                    )
+                                        # Get conversation history if context service available
+                                        conversation_history = None
+                                        if context_service and session:
+                                            ctx = context_service.get_or_create_context(session.session_id)
+                                            conversation_history = [
+                                                {"role": msg.role, "content": msg.content}
+                                                for msg in ctx.get_messages()
+                                            ]
+                                            logger.debug(f"Using {len(conversation_history)} messages from history")
 
-                                    logger.info(f"AI response: {response_text[:100]}...")
+                                        response_text, sources, ai_time = await ai_agent.generate_response(
+                                            message=text,
+                                            use_knowledge_base=True,
+                                            conversation_history=conversation_history
+                                        )
 
-                                    # 3. Text-to-Speech
-                                    logger.info("Running TTS...")
-                                    audio_response, tts_time = await tts_service.synthesize(response_text)
+                                        # Check if interrupted during AI generation
+                                        if session.is_cancelled():
+                                            logger.info("Response generation interrupted")
+                                            session.clear_buffer()
+                                            continue
+
+                                        logger.info(f"AI response: {response_text[:100]}...")
+
+                                        # 3. Text-to-Speech
+                                        logger.info("Running TTS...")
+                                        audio_response, tts_time = await tts_service.synthesize(response_text)
+
+                                        # Check if interrupted during TTS
+                                        if session.is_cancelled():
+                                            logger.info("TTS generation interrupted")
+                                            session.clear_buffer()
+                                            continue
 
                                     # Cache the response for future requests
                                     if cache_service:
@@ -357,26 +428,30 @@ async def websocket_live_stream(websocket: WebSocket) -> None:
 
                                 total_time = (time.perf_counter() - start_time) * 1000
 
-                                # Send response
-                                await websocket.send_json({
-                                    "type": "response",
-                                    "data": {
-                                        "text": response_text,
-                                        "audio": audio_b64,
-                                        "sources": sources,
-                                        "processing_times": {
-                                            "transcription_ms": stt_time,
-                                            "ai_generation_ms": ai_time,
-                                            "synthesis_ms": tts_time,
-                                            "total_ms": total_time
+                                    # Send response
+                                    await websocket.send_json({
+                                        "type": "response",
+                                        "data": {
+                                            "text": response_text,
+                                            "audio": audio_b64,
+                                            "sources": sources,
+                                            "processing_times": {
+                                                "transcription_ms": stt_time,
+                                                "ai_generation_ms": ai_time,
+                                                "synthesis_ms": tts_time,
+                                                "total_ms": total_time
+                                            }
                                         }
-                                    }
-                                })
+                                    })
 
-                                logger.info(f"Response sent (total: {total_time:.2f}ms)")
+                                    logger.info(f"Response sent (total: {total_time:.2f}ms)")
 
-                                # Clear buffer for next utterance
-                                session.clear_buffer()
+                                    # Clear buffer for next utterance
+                                    session.clear_buffer()
+
+                                finally:
+                                    # Always mark response as ended
+                                    session.end_response()
 
                     except Exception as e:
                         logger.error(f"Failed to process audio chunk: {e}")
@@ -430,93 +505,113 @@ async def websocket_live_stream(websocket: WebSocket) -> None:
 
                     logger.info(f"Transcription: {text}")
 
-                    # Check cache first
-                    cached_response = None
-                    if cache_service:
-                        cached_response = cache_service.get(text, use_semantic=True)
+                    # Mark that AI is starting to respond
+                    session.start_response()
 
-                    if cached_response:
-                        # Cache hit - use cached response
-                        response_text, audio_response, sources = cached_response
-                        logger.info("Using cached response")
-                        ai_time = 0.0
-                        tts_time = 0.0
+                    try:
+                        # Check cache first
+                        cached_response = None
+                        if cache_service:
+                            cached_response = cache_service.get(text, use_semantic=True)
 
-                        # Encode audio to base64
-                        audio_b64 = base64.b64encode(audio_response).decode('utf-8')
-                    else:
-                        # Cache miss - generate new response
-                        # 2. AI Agent with conversation context
-                        logger.info("Running AI agent...")
+                        if cached_response:
+                            # Cache hit - use cached response
+                            response_text, audio_response, sources = cached_response
+                            logger.info("Using cached response")
+                            ai_time = 0.0
+                            tts_time = 0.0
 
-                        # Get conversation history if context service available
-                        conversation_history = None
-                        if context_service and session:
-                            ctx = context_service.get_or_create_context(session.session_id)
-                            conversation_history = [
-                                {"role": msg.role, "content": msg.content}
-                                for msg in ctx.get_messages()
-                            ]
-                            logger.debug(f"Using {len(conversation_history)} messages from history")
+                            # Encode audio to base64
+                            audio_b64 = base64.b64encode(audio_response).decode('utf-8')
+                        else:
+                            # Cache miss - generate new response
+                            # 2. AI Agent with conversation context
+                            logger.info("Running AI agent...")
 
-                        response_text, sources, ai_time = await ai_agent.generate_response(
+                            # Get conversation history if context service available
+                            conversation_history = None
+                            if context_service and session:
+                                ctx = context_service.get_or_create_context(session.session_id)
+                                conversation_history = [
+                                    {"role": msg.role, "content": msg.content}
+                                    for msg in ctx.get_messages()
+                                ]
+                                logger.debug(f"Using {len(conversation_history)} messages from history")
+
+                            response_text, sources, ai_time = await ai_agent.generate_response(
                             message=text,
                             use_knowledge_base=True,
                             conversation_history=conversation_history
                         )
 
-                        logger.info(f"AI response: {response_text[:100]}...")
+                            logger.info(f"AI response: {response_text[:100]}...")
 
-                        # 3. Text-to-Speech
-                        logger.info("Running TTS...")
-                        audio_response, tts_time = await tts_service.synthesize(response_text)
+                            # Check if interrupted during AI generation
+                            if session.is_cancelled():
+                                logger.info("Response generation interrupted")
+                                session.clear_buffer()
+                                continue
 
-                        # Cache the response for future requests
-                        if cache_service:
-                            cache_service.put(
-                                query=text,
-                                response_text=response_text,
-                                audio_data=audio_response,
-                                audio_format="mp3",
-                                sources=sources,
-                                ttl_seconds=3600  # 1 hour
+                            # 3. Text-to-Speech
+                            logger.info("Running TTS...")
+                            audio_response, tts_time = await tts_service.synthesize(response_text)
+
+                            # Check if interrupted during TTS
+                            if session.is_cancelled():
+                                logger.info("TTS generation interrupted")
+                                session.clear_buffer()
+                                continue
+
+                            # Cache the response for future requests
+                            if cache_service:
+                                cache_service.put(
+                                    query=text,
+                                    response_text=response_text,
+                                    audio_data=audio_response,
+                                    audio_format="mp3",
+                                    sources=sources,
+                                    ttl_seconds=3600  # 1 hour
+                                )
+
+                            # Encode audio to base64
+                            audio_b64 = base64.b64encode(audio_response).decode('utf-8')
+
+                        # Save exchange to context
+                        if context_service and session:
+                            ctx = context_service.get_or_create_context(session.session_id)
+                            ctx.add_exchange(
+                                user_msg=text,
+                                assistant_msg=response_text,
+                                user_metadata={"confidence": confidence},
+                                assistant_metadata={"sources": sources}
                             )
 
-                        # Encode audio to base64
-                        audio_b64 = base64.b64encode(audio_response).decode('utf-8')
+                        total_time = (time.perf_counter() - start_time) * 1000
 
-                    # Save exchange to context
-                    if context_service and session:
-                        ctx = context_service.get_or_create_context(session.session_id)
-                        ctx.add_exchange(
-                            user_msg=text,
-                            assistant_msg=response_text,
-                            user_metadata={"confidence": confidence},
-                            assistant_metadata={"sources": sources}
-                        )
-
-                    total_time = (time.perf_counter() - start_time) * 1000
-
-                    # Send response
-                    await websocket.send_json({
-                        "type": "response",
-                        "data": {
-                            "text": response_text,
-                            "audio": audio_b64,
-                            "sources": sources,
-                            "processing_times": {
-                                "transcription_ms": stt_time,
-                                "ai_generation_ms": ai_time,
-                                "synthesis_ms": tts_time,
-                                "total_ms": total_time
+                        # Send response
+                        await websocket.send_json({
+                            "type": "response",
+                            "data": {
+                                "text": response_text,
+                                "audio": audio_b64,
+                                "sources": sources,
+                                "processing_times": {
+                                    "transcription_ms": stt_time,
+                                    "ai_generation_ms": ai_time,
+                                    "synthesis_ms": tts_time,
+                                    "total_ms": total_time
+                                }
                             }
-                        }
-                    })
+                        })
 
-                    logger.info(f"Response sent (total: {total_time:.2f}ms)")
+                        logger.info(f"Response sent (total: {total_time:.2f}ms)")
 
-                    # Clear buffer for next utterance
-                    session.clear_buffer()
+                        # Clear buffer for next utterance
+                        session.clear_buffer()
+
+                    finally:
+                        # Always mark response as ended
+                        session.end_response()
 
                 else:
                     logger.warning(f"Unknown message type: {msg_type}")
