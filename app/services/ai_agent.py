@@ -1,0 +1,240 @@
+"""AI Agent service for generating responses using LLMs."""
+
+import time
+from abc import ABC, abstractmethod
+from typing import Optional
+
+import httpx
+from loguru import logger
+
+from app.core.config import get_settings
+from app.services.knowledge_base import KnowledgeBase
+
+
+class LLMProvider(ABC):
+    """Abstract base class for LLM providers."""
+
+    @abstractmethod
+    async def generate(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 500
+    ) -> str:
+        """Generate response from LLM.
+
+        Args:
+            prompt: User prompt
+            system_prompt: System prompt for context
+            temperature: Sampling temperature
+            max_tokens: Maximum tokens to generate
+
+        Returns:
+            Generated response text
+        """
+        pass
+
+
+class OllamaProvider(LLMProvider):
+    """Ollama LLM provider for local model inference."""
+
+    def __init__(self, base_url: str, model: str):
+        """Initialize Ollama provider.
+
+        Args:
+            base_url: Ollama server base URL
+            model: Model name to use
+        """
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.client = httpx.AsyncClient(timeout=60.0)
+        logger.info(f"Ollama provider initialized: {base_url} / {model}")
+
+    async def generate(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 500
+    ) -> str:
+        """Generate response using Ollama."""
+        try:
+            # Prepare messages
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": prompt})
+
+            # Call Ollama API
+            response = await self.client.post(
+                f"{self.base_url}/api/chat",
+                json={
+                    "model": self.model,
+                    "messages": messages,
+                    "stream": False,
+                    "options": {
+                        "temperature": temperature,
+                        "num_predict": max_tokens
+                    }
+                }
+            )
+
+            response.raise_for_status()
+            result = response.json()
+
+            return result.get("message", {}).get("content", "")
+
+        except httpx.HTTPError as e:
+            logger.error(f"Ollama API error: {e}")
+            raise RuntimeError(f"Failed to generate response: {e}")
+
+    async def close(self) -> None:
+        """Close HTTP client."""
+        await self.client.aclose()
+
+
+class LocalLLMProvider(LLMProvider):
+    """Local LLM provider using transformers (for smaller models)."""
+
+    def __init__(self, model_name: str = "bigscience/bloomz-560m"):
+        """Initialize local LLM provider.
+
+        Args:
+            model_name: HuggingFace model name
+        """
+        try:
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+            import torch
+
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+
+            logger.info(f"Loading local model: {model_name} on {device}")
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+            self.model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
+            self.device = device
+            logger.info("Local LLM provider initialized")
+
+        except ImportError:
+            raise ImportError("Transformers not installed. Install with: pip install transformers")
+
+    async def generate(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 500
+    ) -> str:
+        """Generate response using local model."""
+        # Combine system prompt and user prompt
+        full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+
+        # Tokenize
+        inputs = self.tokenizer(full_prompt, return_tensors="pt").to(self.device)
+
+        # Generate
+        outputs = self.model.generate(
+            **inputs,
+            max_new_tokens=max_tokens,
+            temperature=temperature,
+            do_sample=True,
+            pad_token_id=self.tokenizer.eos_token_id
+        )
+
+        # Decode
+        response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+        # Remove prompt from response
+        response = response[len(full_prompt):].strip()
+
+        return response
+
+
+class AIAgent:
+    """AI Agent for generating contextual responses using RAG."""
+
+    def __init__(self, knowledge_base: Optional[KnowledgeBase] = None):
+        """Initialize AI agent.
+
+        Args:
+            knowledge_base: Optional knowledge base for RAG
+        """
+        settings = get_settings()
+        self.settings = settings
+        self.knowledge_base = knowledge_base
+
+        # Initialize LLM provider
+        if settings.llm_provider == "ollama":
+            self.llm = OllamaProvider(
+                base_url=settings.ollama_base_url,
+                model=settings.ollama_model
+            )
+        elif settings.llm_provider == "local":
+            self.llm = LocalLLMProvider()
+        else:
+            raise ValueError(f"Unknown LLM provider: {settings.llm_provider}")
+
+        logger.info(f"AI Agent initialized with {settings.llm_provider} provider")
+
+    async def generate_response(
+        self,
+        message: str,
+        use_knowledge_base: bool = True
+    ) -> tuple[str, Optional[list[str]], float]:
+        """Generate response to user message.
+
+        Args:
+            message: User message
+            use_knowledge_base: Whether to use knowledge base for context
+
+        Returns:
+            Tuple of (response, sources, processing_time_ms)
+        """
+        start_time = time.perf_counter()
+
+        # Get context from knowledge base if enabled
+        context = ""
+        sources = []
+
+        if use_knowledge_base and self.knowledge_base:
+            try:
+                context = self.knowledge_base.get_context(message)
+                # Extract sources
+                results = self.knowledge_base.search(message)
+                sources = [meta.get("source", "") for _, _, meta in results]
+                logger.debug(f"Retrieved context from {len(sources)} sources")
+            except Exception as e:
+                logger.warning(f"Failed to retrieve from knowledge base: {e}")
+
+        # Build prompt
+        if context:
+            prompt = f"""السياق من قاعدة المعرفة:
+{context}
+
+السؤال: {message}
+
+الرجاء الإجابة بناءً على السياق المقدم. إذا لم تكن المعلومات متوفرة في السياق، قل ذلك بوضوح."""
+        else:
+            prompt = message
+
+        # Generate response
+        try:
+            response = await self.llm.generate(
+                prompt=prompt,
+                system_prompt=self.settings.system_prompt,
+                temperature=self.settings.temperature,
+                max_tokens=self.settings.max_tokens
+            )
+        except Exception as e:
+            logger.error(f"Failed to generate response: {e}")
+            response = "عذراً، حدث خطأ أثناء معالجة طلبك."
+
+        processing_time = (time.perf_counter() - start_time) * 1000
+
+        logger.info(f"Generated response in {processing_time:.2f}ms")
+        return response, sources if sources else None, processing_time
+
+    async def close(self) -> None:
+        """Clean up resources."""
+        if hasattr(self.llm, "close"):
+            await self.llm.close()

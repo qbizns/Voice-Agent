@@ -1,0 +1,72 @@
+[tool.poetry]
+name = "voice-agent"
+version = "0.1.0"
+description = "Ultra-fast Arabic voice agent with FastAPI and local AI processing"
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+python = "^3.10"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+fastapi = "^0.104.1"
+uvicorn = {extras = ["standard"], version = "^0.24.0"}
+websockets = "^12.0"
+python-multipart = "^0.0.6"
+pydantic = "^2.5.0"
+pydantic-settings = "^2.1.0"
+
+# Audio processing
+pyaudio = "^0.2.14"
+soundfile = "^0.12.1"
+numpy = "^1.26.2"
+scipy = "^1.11.4"
+
+# Speech recognition
+vosk = "^0.3.45"
+openai-whisper = "^20231117"
+torch = "^2.1.0"
+torchaudio = "^2.1.0"
+
+# Text-to-Speech
+edge-tts = "^6.1.9"
+TTS = "^0.21.1"
+pydub = "^0.25.1"
+
+# AI/LLM
+langchain = "^0.1.0"
+langchain-community = "^0.0.10"
+sentence-transformers = "^2.2.2"
+faiss-cpu = "^1.7.4"
+chromadb = "^0.4.18"
+
+# Utilities
+python-dotenv = "^1.0.0"
+loguru = "^0.7.2"
+rich = "^13.7.0"
+aiofiles = "^23.2.1"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.3"
+pytest-asyncio = "^0.21.1"
+black = "^23.11.0"
+ruff = "^0.1.6"
+mypy = "^1.7.1"
+pre-commit = "^3.5.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 100
+target-version = ['py310']
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
